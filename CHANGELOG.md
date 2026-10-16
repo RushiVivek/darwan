@@ -28,6 +28,8 @@ kept for a day, and an old copy is used if GitHub's request limit has been spent
 
 The source is removed from Explore, Home and `darwan wallpaper online`.
 
+### Also
+
 - With DMS keeping a wallpaper per screen, setting one on every screen no longer ends in "DMS took the command but
   doesn't show …": Darwan now asks each screen what it shows, as it already set each one.
 - Flipping one switch under *Filter* no longer makes every switch animate as if it had flipped too.
