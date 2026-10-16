@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import org.darwan
 
-// One wallpaper in a grid: its picture on a tile of its own colour, badges, and its name and size on hover. Kept
+// One wallpaper in a grid: its picture over a blur of its own colours, badges, and its name and size on hover. Kept
 // light, since a grid makes many: the picture is one shader (no layers), and the words exist only while hovered.
 FocusScope {
     id: card
@@ -50,17 +50,13 @@ FocusScope {
         y: card.lit ? -3 : 0
         Behavior on y { NumberAnimation { duration: Style.medium; easing.type: Style.ease } }
 
-        // The picture's own colour while it loads: a calm tile rather than a spinner per card.
-        Rectangle {
-            anchors.fill: parent
-            radius: 16
-            color: card.item.swatches && card.item.swatches.length ? card.item.swatches[0] : Qt.rgba(1, 1, 1, 0.06)
-            opacity: card.item.swatches && card.item.swatches.length ? 0.45 : 1
-        }
+        // While it loads, the picture's own colours blurred together: a calm stand-in rather than a spinner per card.
         RoundedImage {
             id: picture
             anchors.fill: parent
             radius: 16
+            placeholder: true
+            swatches: card.item.swatches || []
             source: card.item.thumb
             sourceSize.width: 512
             onStatusChanged: if (status === Image.Error && card.backend) card.backend.wallHide(card.item.key || card.item.path)

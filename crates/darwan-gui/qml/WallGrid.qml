@@ -26,10 +26,19 @@ GridView {
     reuseItems: true
     clip: true
     SmoothWheel { view: grid; step: grid.cellHeight }
-    // New results rise into place rather than appearing.
-    add: Transition {
-        NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 320; easing.type: Easing.OutCubic }
-        NumberAnimation { property: "y"; from: ViewTransition.destination.y + 24; duration: 320; easing.type: Easing.OutCubic }
+    // While more are coming, stand-ins hold the slots they will fill: the rest of the last row and one more, or the
+    // screen when there is nothing yet. Real cards take those slots as they arrive, so nothing moves.
+    readonly property int waiting: !loading ? 0
+        : count === 0 ? columns * Math.max(2, Math.ceil(height / cellHeight))
+        : (columns - count % columns) % columns + columns
+    // One clock for every stand-in's light band, in widths of the grid: it crosses, then rests.
+    property real sweep: 0
+    NumberAnimation on sweep {
+        running: grid.waiting > 0 && grid.visible
+        loops: Animation.Infinite
+        from: -0.3
+        to: 1.9
+        duration: 2400
     }
     // Only while scrolling, as wallspace shows it.
     ScrollIndicator.vertical: ScrollIndicator {}
@@ -54,18 +63,20 @@ GridView {
     }
     footer: Item {
         width: grid.width
-        height: 80
-        Row {
-            anchors.centerIn: parent
-            spacing: 8
-            visible: grid.loading
-            Spinner { anchors.verticalCenter: parent.verticalCenter; color: Qt.rgba(1, 1, 1, 0.7) }
-            Label {
-                anchors.verticalCenter: parent.verticalCenter
-                text: "Loading…"
-                font.family: Style.family
-                font.pixelSize: Style.body
-                color: Qt.rgba(1, 1, 1, 0.7)
+        // Rows of stand-ins below the last real one; the first may share that row.
+        height: (Math.ceil((grid.count + grid.waiting) / grid.columns) - Math.ceil(grid.count / grid.columns)) * grid.cellHeight + 80
+        Repeater {
+            model: grid.waiting
+            delegate: RoundedImage {
+                required property int index
+                readonly property int slot: grid.count + index
+                x: slot % grid.columns * grid.cellWidth + 10
+                y: (Math.floor(slot / grid.columns) - Math.ceil(grid.count / grid.columns)) * grid.cellHeight
+                width: grid.cellWidth - 20
+                height: width * 9 / 16
+                placeholder: true
+                shining: true
+                band: (grid.sweep * grid.width - x - 0.35 * y) / width
             }
         }
     }

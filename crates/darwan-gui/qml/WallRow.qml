@@ -98,12 +98,29 @@ Column {
             backend: row.feed.backend
             onOpen: row.open(row.feed.items[index], index)
         }
-        Spinner {
-            anchors.verticalCenter: parent.verticalCenter
-            x: 10
+        // Until the first arrive, stand-ins where they will be, their light bands on one clock.
+        Row {
+            id: waiting
+            spacing: list.spacing
             visible: row.loading && row.feed.model.count === 0
-            color: Qt.rgba(1, 1, 1, 0.7)
-            size: 22
+            property real sweep: 0
+            NumberAnimation on sweep {
+                running: waiting.visible
+                loops: Animation.Infinite
+                from: -0.3
+                to: 1.9
+                duration: 2400
+            }
+            Repeater {
+                model: waiting.visible ? Math.ceil((row.width + list.spacing) / (row.cardWidth + list.spacing)) : 0
+                delegate: RoundedImage {
+                    width: row.cardWidth
+                    height: row.cardWidth * 9 / 16
+                    placeholder: true
+                    shining: true
+                    band: (waiting.sweep * row.width - x) / width
+                }
+            }
         }
     }
 }

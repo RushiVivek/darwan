@@ -13,6 +13,9 @@ has no title now, so its card shows the source's name.
 
 - The sources now load side by side, so the first pictures no longer wait for the slowest one, and up to eight
   thumbnails load at once (dharmx/walls, whose thumbnails come from full-size pictures, takes at most three of them).
+- Cards no longer rise into place. Each one holds its spot from the start as a soft blur of the picture's colours (a
+  plain glass tile when the source gives none), and the picture fades in over it; the spots still loading shimmer
+  until their pictures arrive.
 
 ### A new source: dharmx/walls
 
