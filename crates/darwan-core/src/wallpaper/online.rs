@@ -99,6 +99,11 @@ impl Found {
             .chars()
             .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
             .collect();
+        // dharmx/walls' ids are paths, which can differ only in characters dropped above.
+        if self.source == Source::Walls {
+            let hash = crate::media::fnv1a(self.id.as_bytes()) as u32;
+            return format!("walls-{safe}-{hash:08x}.{}", self.extension());
+        }
         format!("{}-{safe}.{}", self.source.id(), self.extension())
     }
 }
@@ -980,6 +985,14 @@ mod tests {
         assert_eq!(
             lake.page,
             "https://github.com/dharmx/walls/blob/main/nature/Lake_view-1.JPG"
+        );
+
+        let mut twin = lake.clone();
+        twin.id = "nature/Lakeview-1.JPG".into();
+        assert_ne!(
+            lake.file_name(),
+            twin.file_name(),
+            "two paths that differ only in dropped characters would overwrite one download with the other"
         );
     }
 

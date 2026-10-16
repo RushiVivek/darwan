@@ -22,6 +22,8 @@ kept for a day, and an old copy is used if GitHub's request limit has been spent
 
 The source is removed from Explore, Home and `darwan wallpaper online`.
 
+- Flipping one switch under *Filter* no longer makes every switch animate as if it had flipped too.
+
 ## 0.5.0 - 2026-09-30 02:12 +06:00
 
 ### Multi-monitor

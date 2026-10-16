@@ -265,17 +265,19 @@ FocusScope {
                 color: Style.text
             }
             Repeater {
-                model: page.explore ? page.explore.groups : []
+                // A count, not the list: `explore` is parsed anew at every revision, and a new list would rebuild
+                // every row, so every switch would animate when one is flipped.
+                model: page.explore ? page.explore.groups.length : 0
                 delegate: SettingRow {
                     id: groupRow
-                    required property var modelData
                     required property int index
+                    readonly property var group: page.explore ? page.explore.groups[groupRow.index] : ({ id: "", label: "", on: false })
                     width: 320 - 12
                     first: groupRow.index === 0
-                    label: "Show " + groupRow.modelData.label.toLowerCase()
+                    label: "Show " + groupRow.group.label.toLowerCase()
                     Toggle {
-                        on: groupRow.modelData.on
-                        onFlipped: v => page.backend.wallAllow(groupRow.modelData.id, v)
+                        on: groupRow.group.on
+                        onFlipped: v => page.backend.wallAllow(groupRow.group.id, v)
                     }
                 }
             }
