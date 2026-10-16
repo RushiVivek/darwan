@@ -59,7 +59,7 @@ pub fn feeds(sources: &[Source], query: &Query, topic: &str) -> Vec<Feed> {
         more: true,
     };
     let searching = !query.text.trim().is_empty() || !topic.is_empty();
-    // The quick sources first; Wallhaven is the slowest, so it comes last.
+    // The order a mixed round interleaves in: the curated sources lead, Wallhaven follows.
     let mut sources = sources.to_vec();
     sources.sort_by_key(|s| *s == Source::Wallhaven);
     sources
@@ -537,7 +537,7 @@ mod tests {
         assert_eq!(
             sources,
             [Source::Commons, Source::Walls, Source::Wallhaven],
-            "Bing can't be searched; Commons has space and dharmx/walls filters itself; Wallhaven, the slowest, comes last"
+            "Bing can't be searched; Commons has space and dharmx/walls filters itself; Wallhaven follows them"
         );
         assert_eq!(space[1].query.text, "space");
         assert_eq!(space[2].query.text, "space");
