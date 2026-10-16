@@ -4,6 +4,8 @@ What changed in each release of Darwan, newest first. Each release's section is 
 
 ## Unreleased
 
+## 0.6.0 - 2026-10-17 00:35 +06:00
+
 ### Explore loads much faster
 
 Wallhaven is now filtered in its own search, so its pictures no longer wait for a check of each one's tags. The
