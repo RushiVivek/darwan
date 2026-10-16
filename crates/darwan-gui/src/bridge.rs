@@ -762,6 +762,179 @@ fn prepare(
     });
 }
 
+// One round of a channel's pages, as the sources answer. What comes within a moment of the first answer is held and
+// shown as one mix; a page after that is shown as it comes, so a slow source doesn't hold back the others. Every batch
+// goes after everything shown before it.
+struct Round {
+    held: Vec<(usize, Vec<darwan_core::wallpaper::online::Found>)>,
+    left: usize,
+    until: Option<std::time::Instant>,
+    holding: bool,
+}
+
+impl Round {
+    const GRACE: std::time::Duration = std::time::Duration::from_secs(1);
+
+    fn new(feeds: usize) -> Self {
+        Round {
+            held: Vec::new(),
+            left: feeds,
+            until: None,
+            holding: true,
+        }
+    }
+
+    fn done(&self) -> bool {
+        self.left == 0
+    }
+
+    // How long to wait for another page before showing what's held; `None` waits for one.
+    fn wait(&self, now: std::time::Instant) -> Option<std::time::Duration> {
+        self.until
+            .filter(|_| self.holding)
+            .map(|u| u.saturating_duration_since(now))
+    }
+
+    // What to show now that `feed`'s page came.
+    fn arrive(
+        &mut self,
+        feed: usize,
+        page: Vec<darwan_core::wallpaper::online::Found>,
+        now: std::time::Instant,
+    ) -> Vec<darwan_core::wallpaper::online::Found> {
+        self.left -= 1;
+        if !self.holding {
+            return page;
+        }
+        let until = *self.until.get_or_insert(now + Self::GRACE);
+        self.held.push((feed, page));
+        if self.left == 0 || now >= until {
+            self.release()
+        } else {
+            Vec::new()
+        }
+    }
+
+    // The wait is over: what's held, in the feeds' order rather than as it came, one from each source in turn.
+    fn release(&mut self) -> Vec<darwan_core::wallpaper::online::Found> {
+        self.holding = false;
+        self.held.sort_by_key(|(feed, _)| *feed);
+        let all: Vec<_> = self.held.drain(..).flat_map(|(_, page)| page).collect();
+        walls::mixed(&all).into_iter().cloned().collect()
+    }
+}
+
+// Which thumbnail to fetch next: eight at once, and dharmx/walls's, each a whole original of a megabyte or so (up to
+// 20), in at most three of the eight, so the small ones keep moving.
+#[derive(Default)]
+struct ThumbQueue {
+    queue: std::collections::VecDeque<darwan_core::wallpaper::online::Found>,
+    busy: usize,
+    walls: usize,
+}
+
+impl ThumbQueue {
+    const AT_ONCE: usize = 8;
+    const WALLS: usize = 3;
+
+    // The next one a free slot may take, taking the slot.
+    fn take(&mut self) -> Option<darwan_core::wallpaper::online::Found> {
+        use darwan_core::wallpaper::online::Source;
+        if self.busy >= Self::AT_ONCE {
+            return None;
+        }
+        let walls_free = self.walls < Self::WALLS;
+        let i = self
+            .queue
+            .iter()
+            .position(|f| walls_free || f.source != Source::Walls)?;
+        let found = self.queue.remove(i)?;
+        self.busy += 1;
+        self.walls += usize::from(found.source == Source::Walls);
+        Some(found)
+    }
+
+    fn finish(&mut self, found: &darwan_core::wallpaper::online::Found) {
+        self.busy -= 1;
+        self.walls -= usize::from(found.source == darwan_core::wallpaper::online::Source::Walls);
+    }
+}
+
+// One fetch's thumbnails. Adding never waits: a thread starts when a slot is free, and each takes the next as it
+// finishes. What's still queued is dropped once the channel asks for something else.
+struct Thumbs {
+    queue: std::sync::Mutex<ThumbQueue>,
+    client: std::sync::Arc<darwan_core::wallpaper::online::Client>,
+    thread: Thread,
+    ticket: (u64, std::sync::Arc<std::sync::atomic::AtomicU64>),
+}
+
+impl Thumbs {
+    fn add(self: &std::sync::Arc<Self>, found: darwan_core::wallpaper::online::Found) {
+        self.queue.lock().unwrap().queue.push_back(found);
+        while let Some(found) = self.next(None) {
+            let me = self.clone();
+            std::thread::spawn(move || {
+                let mut found = found;
+                loop {
+                    me.fetch(&found);
+                    match me.next(Some(&found)) {
+                        Some(next) => found = next,
+                        None => break,
+                    }
+                }
+            });
+        }
+    }
+
+    fn next(
+        &self,
+        finished: Option<&darwan_core::wallpaper::online::Found>,
+    ) -> Option<darwan_core::wallpaper::online::Found> {
+        let mut q = self.queue.lock().unwrap();
+        if let Some(f) = finished {
+            q.finish(f);
+        }
+        if self.ticket.1.load(std::sync::atomic::Ordering::Relaxed) != self.ticket.0 {
+            q.queue.clear();
+        }
+        q.take()
+    }
+
+    // A cached one is only a file check.
+    fn fetch(&self, found: &darwan_core::wallpaper::online::Found) {
+        let Ok(thumb) = self.client.thumbnail(found) else {
+            return;
+        };
+        let key = found.key();
+        let print = std::fs::read(&thumb).map(|b| walls::print(&b)).unwrap_or(0);
+        let _ = self.thread.queue(move |mut qo| {
+            {
+                let mut r = qo.as_mut().rust_mut();
+                let w = &mut r.walls;
+                // Two pictures with the very same thumbnail are a placeholder, not wallpapers.
+                match w.thumb_prints.get(&print) {
+                    Some(other) if other != &key && print != 0 => {
+                        let other = other.clone();
+                        w.hidden.insert(other);
+                        w.hidden.insert(key.clone());
+                    }
+                    _ => {
+                        w.thumb_prints.insert(print, key.clone());
+                    }
+                }
+                for c in w.channels.values_mut() {
+                    if c.items.iter().any(|f| f.key() == key) {
+                        c.stamp = c.stamp.wrapping_add(1);
+                    }
+                }
+                w.thumbs.insert(key, thumb);
+            }
+            qo.as_mut().feed_bump();
+        });
+    }
+}
+
 impl qobject::Backend {
     // The Library, what draws the wallpaper, the switches changed: announced within ~120 ms, once however many
     // changes came meanwhile.
@@ -1001,11 +1174,14 @@ impl qobject::Backend {
         }
     }
 
-    // Pages in the background until the channel holds its target or the source runs out; each result is shown as
-    // soon as it passes, and thumbnails load four at a time.
+    // Pages in the background until the channel holds its target or every source runs out. Each round asks every
+    // source at once (see `Round` for how their pages are shown), and thumbnails load eight at a time.
     fn fetch_channel(mut self: Pin<&mut Self>, name: String) {
-        use darwan_core::wallpaper::online::Client;
+        use darwan_core::wallpaper::online::{Client, Found};
+        use std::sync::Arc;
         use std::sync::atomic::Ordering;
+        use std::sync::mpsc::{self, RecvTimeoutError};
+        use std::time::Instant;
         let allowed = allowed(&self.rust().config);
         let started = {
             let mut r = self.as_mut().rust_mut();
@@ -1026,17 +1202,23 @@ impl qobject::Backend {
         };
         let thread = self.qt_thread();
         std::thread::spawn(move || {
-            let (mine, counter) = ticket;
+            let (mine, counter) = ticket.clone();
             let live = || counter.load(Ordering::Relaxed) == mine;
-            let client = std::sync::Arc::new(Client::new(paths::cache_dir().join("online")));
-            let slots =
-                std::sync::Arc::new((std::sync::Mutex::new(0usize), std::sync::Condvar::new()));
+            let client = Arc::new(Client::new(paths::cache_dir().join("online")));
+            let thumbs = Arc::new(Thumbs {
+                queue: Default::default(),
+                client: client.clone(),
+                thread: thread.clone(),
+                ticket,
+            });
             let mut count = have;
             let mut problem: Result<String, String> = Ok(String::new());
-            // One page from each source in turn, so every source shows early.
-            // Results only ever join at the end, so nothing moves above what's on screen: a mixed round's quick
-            // sources are interleaved once and appended together; Wallhaven, checking each picture, streams after them.
-            let push = |batch: Vec<darwan_core::wallpaper::online::Found>| {
+            // Results only ever join at the end, so nothing moves above what's on screen. Every push comes from this
+            // thread, so the last message below lands after them all.
+            let push = |batch: Vec<Found>| {
+                if batch.is_empty() {
+                    return;
+                }
                 let n = name.clone();
                 let _ = thread.queue(move |mut qo| {
                     let mut added = false;
@@ -1058,98 +1240,65 @@ impl qobject::Backend {
                     }
                 });
             };
-            let mixing = feeds.len() > 1;
-            'pages: while live() && count < target && feeds.iter().any(|f| f.more) {
-                let mut round: Vec<darwan_core::wallpaper::online::Found> = Vec::new();
-                let mut stop = false;
-                for feed in feeds.iter_mut().filter(|f| f.more) {
-                    if !live() || count >= target {
-                        stop = true;
-                        break;
-                    }
-                    let buffered =
-                        mixing && feed.source != darwan_core::wallpaper::online::Source::Wallhaven;
-                    if !buffered && !round.is_empty() {
-                        push(walls::mixed(&round).into_iter().cloned().collect());
-                        round.clear();
-                    }
-                    let mut q = feed.query.clone();
-                    q.page = feed.next_page;
-                    let result = client.search_each(feed.source, &q, &allowed, &mut |found| {
-                        if !live() {
-                            return;
-                        }
-                        count += 1;
-                        if buffered {
-                            round.push(found.clone());
-                        } else {
-                            push(vec![found.clone()]);
-                        }
-                        // At most four thumbnails at once; a cached one is only a file check.
-                        let (client, slots, thread, found) =
-                            (client.clone(), slots.clone(), thread.clone(), found.clone());
-                        {
-                            let (lock, cv) = &*slots;
-                            let mut busy = lock.lock().unwrap();
-                            while *busy >= 4 {
-                                busy = cv.wait(busy).unwrap();
-                            }
-                            *busy += 1;
-                        }
-                        std::thread::spawn(move || {
-                            if let Ok(thumb) = client.thumbnail(&found) {
-                                let key = found.key();
-                                let print =
-                                    std::fs::read(&thumb).map(|b| walls::print(&b)).unwrap_or(0);
-                                let _ = thread.queue(move |mut qo| {
-                                    {
-                                        let mut r = qo.as_mut().rust_mut();
-                                        let w = &mut r.walls;
-                                        // Two pictures with the very same thumbnail are a placeholder, not wallpapers.
-                                        match w.thumb_prints.get(&print) {
-                                            Some(other) if other != &key && print != 0 => {
-                                                let other = other.clone();
-                                                w.hidden.insert(other);
-                                                w.hidden.insert(key.clone());
-                                            }
-                                            _ => {
-                                                w.thumb_prints.insert(print, key.clone());
-                                            }
-                                        }
-                                        for c in w.channels.values_mut() {
-                                            if c.items.iter().any(|f| f.key() == key) {
-                                                c.stamp = c.stamp.wrapping_add(1);
-                                            }
-                                        }
-                                        w.thumbs.insert(key, thumb);
-                                    }
-                                    qo.as_mut().feed_bump();
-                                });
-                            }
-                            let (lock, cv) = &*slots;
-                            *lock.lock().unwrap() -= 1;
-                            cv.notify_one();
+            while live() && count < target && feeds.iter().any(|f| f.more) {
+                let open: Vec<usize> = (0..feeds.len()).filter(|&i| feeds[i].more).collect();
+                let mut round = Round::new(open.len());
+                let (tx, rx) = mpsc::channel();
+                let refused = std::thread::scope(|s| {
+                    for &i in &open {
+                        let mut q = feeds[i].query.clone();
+                        q.page = feeds[i].next_page;
+                        let (source, tx, client, allowed) =
+                            (feeds[i].source, tx.clone(), &client, &allowed);
+                        s.spawn(move || {
+                            let _ = tx.send((i, client.search(source, &q, allowed)));
                         });
-                    });
-                    feed.next_page += 1;
-                    match result {
-                        Ok(p) if p.refused.is_some() => {
-                            problem = Ok(p.refused.unwrap_or_default());
-                            feeds.iter_mut().for_each(|f| f.more = false);
-                            break 'pages;
-                        }
-                        Ok(p) => feed.more = p.more,
-                        // One source down doesn't stop the others.
-                        Err(e) => {
-                            feed.more = false;
-                            problem = Err(e);
-                        }
                     }
-                }
-                if !round.is_empty() {
-                    push(walls::mixed(&round).into_iter().cloned().collect());
-                }
-                if stop {
+                    drop(tx);
+                    while !round.done() {
+                        let got = match round.wait(Instant::now()) {
+                            Some(left) => rx.recv_timeout(left),
+                            None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
+                        };
+                        let (i, result) = match got {
+                            Ok(got) => got,
+                            Err(RecvTimeoutError::Timeout) => {
+                                push(round.release());
+                                continue;
+                            }
+                            Err(RecvTimeoutError::Disconnected) => break,
+                        };
+                        let feed = &mut feeds[i];
+                        feed.next_page += 1;
+                        let page = match result {
+                            Ok(p) if p.refused.is_some() => {
+                                problem = Ok(p.refused.unwrap_or_default());
+                                return true;
+                            }
+                            Ok(p) => {
+                                feed.more = p.more;
+                                p.items
+                            }
+                            // One source down doesn't stop the others.
+                            Err(e) => {
+                                feed.more = false;
+                                problem = Err(e);
+                                Vec::new()
+                            }
+                        };
+                        if !live() {
+                            break;
+                        }
+                        count += page.len();
+                        for f in &page {
+                            thumbs.add(f.clone());
+                        }
+                        push(round.arrive(i, page, Instant::now()));
+                    }
+                    false
+                });
+                if refused {
+                    feeds.iter_mut().for_each(|f| f.more = false);
                     break;
                 }
             }
@@ -1500,5 +1649,177 @@ impl qobject::Backend {
                 self.rust().status
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Round, ThumbQueue};
+    use darwan_core::wallpaper::online::{Found, Source};
+    use std::time::{Duration, Instant};
+
+    fn page(source: Source, ids: &[&str]) -> Vec<Found> {
+        ids.iter()
+            .map(|id| Found {
+                source,
+                id: id.to_string(),
+                title: String::new(),
+                author: String::new(),
+                licence: String::new(),
+                licence_url: String::new(),
+                page: String::new(),
+                full: String::new(),
+                thumb: String::new(),
+                width: 0,
+                height: 0,
+                bytes: 0,
+                colours: Vec::new(),
+            })
+            .collect()
+    }
+
+    fn keys(batch: &[Found]) -> Vec<String> {
+        batch.iter().map(Found::key).collect()
+    }
+
+    #[test]
+    fn a_slow_source_holds_the_others_back_only_for_the_grace_period() {
+        let t0 = Instant::now();
+        // Feeds in channel order: Bing, Commons, Wallhaven; Commons answers first, then Bing, Wallhaven much later.
+        let mut round = Round::new(3);
+        assert_eq!(
+            round.wait(t0),
+            None,
+            "nothing to show until a source answers"
+        );
+        assert!(
+            round
+                .arrive(1, page(Source::Commons, &["1", "2"]), t0)
+                .is_empty()
+        );
+        assert_eq!(round.wait(t0), Some(Round::GRACE));
+        assert!(
+            round
+                .arrive(
+                    0,
+                    page(Source::Bing, &["7", "8"]),
+                    t0 + Duration::from_millis(400)
+                )
+                .is_empty()
+        );
+        assert_eq!(
+            round.wait(t0 + Duration::from_millis(400)),
+            Some(Round::GRACE - Duration::from_millis(400)),
+            "the wait counts from the first answer, not the latest"
+        );
+        // The grace period runs out with Wallhaven still out: what's in hand is shown, mixed, in the feeds' order.
+        let first = round.release();
+        assert_eq!(keys(&first), ["bing:7", "commons:1", "bing:8", "commons:2"]);
+        assert_eq!(round.wait(t0 + Round::GRACE), None);
+        assert!(!round.done());
+        // The straggler is shown on its own, after the rest.
+        let late = round.arrive(
+            2,
+            page(Source::Wallhaven, &["a", "b"]),
+            t0 + Duration::from_secs(5),
+        );
+        assert_eq!(keys(&late), ["wallhaven:a", "wallhaven:b"]);
+        assert!(round.done());
+    }
+
+    #[test]
+    fn sources_answering_together_are_shown_as_one_mix() {
+        let t0 = Instant::now();
+        let mut round = Round::new(2);
+        assert!(
+            round
+                .arrive(1, page(Source::Wallhaven, &["a", "b"]), t0)
+                .is_empty()
+        );
+        let shown = round.arrive(
+            0,
+            page(Source::Bing, &["7"]),
+            t0 + Duration::from_millis(200),
+        );
+        assert_eq!(keys(&shown), ["bing:7", "wallhaven:a", "wallhaven:b"]);
+        assert!(round.done());
+    }
+
+    #[test]
+    fn a_page_after_the_deadline_shows_everything_held() {
+        // The answer and the timeout raced, and the answer won: it must not wait for the next source.
+        let t0 = Instant::now();
+        let mut round = Round::new(3);
+        assert!(round.arrive(0, page(Source::Bing, &["7"]), t0).is_empty());
+        let shown = round.arrive(
+            1,
+            page(Source::Commons, &["1"]),
+            t0 + Duration::from_millis(1500),
+        );
+        assert_eq!(keys(&shown), ["bing:7", "commons:1"]);
+    }
+
+    #[test]
+    fn one_source_shows_its_page_at_once() {
+        let mut round = Round::new(1);
+        let shown = round.arrive(0, page(Source::Walls, &["x", "y"]), Instant::now());
+        assert_eq!(keys(&shown), ["walls:x", "walls:y"]);
+        assert!(round.done());
+    }
+
+    #[test]
+    fn every_result_is_shown_once_and_each_source_keeps_its_order() {
+        let t0 = Instant::now();
+        let mut round = Round::new(3);
+        let mut shown = Vec::new();
+        shown.extend(round.arrive(2, page(Source::Wallhaven, &["a", "b", "c"]), t0));
+        shown.extend(round.arrive(
+            0,
+            page(Source::Bing, &["7"]),
+            t0 + Duration::from_millis(10),
+        ));
+        shown.extend(round.release());
+        shown.extend(round.arrive(
+            1,
+            page(Source::Commons, &["1", "2"]),
+            t0 + Duration::from_secs(3),
+        ));
+        let shown = keys(&shown);
+        assert_eq!(shown.len(), 6);
+        for source in ["bing", "commons", "wallhaven"] {
+            let mine: Vec<&String> = shown.iter().filter(|k| k.starts_with(source)).collect();
+            let mut sorted = mine.clone();
+            sorted.sort();
+            assert_eq!(mine, sorted, "{source} keeps its own order");
+        }
+    }
+
+    #[test]
+    fn walls_downloads_leave_room_for_small_thumbnails() {
+        let mut q = ThumbQueue::default();
+        q.queue
+            .extend(page(Source::Walls, &["1", "2", "3", "4", "5"]));
+        q.queue.extend(page(Source::Bing, &["7", "8"]));
+        let taken: Vec<String> = std::iter::from_fn(|| q.take()).map(|f| f.key()).collect();
+        assert_eq!(
+            taken,
+            ["walls:1", "walls:2", "walls:3", "bing:7", "bing:8"],
+            "three walls at most, and the small ones go past the rest"
+        );
+        q.finish(&page(Source::Walls, &["1"])[0]);
+        assert_eq!(q.take().map(|f| f.key()).as_deref(), Some("walls:4"));
+        assert!(q.take().is_none());
+    }
+
+    #[test]
+    fn at_most_eight_thumbnails_at_once() {
+        let ids: Vec<String> = (0..12).map(|i| i.to_string()).collect();
+        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let mut q = ThumbQueue::default();
+        q.queue.extend(page(Source::Bing, &ids));
+        assert_eq!(std::iter::from_fn(|| q.take()).count(), 8);
+        q.finish(&page(Source::Bing, &["0"])[0]);
+        assert_eq!(q.take().map(|f| f.key()).as_deref(), Some("bing:8"));
+        assert!(q.take().is_none());
     }
 }

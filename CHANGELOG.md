@@ -11,6 +11,9 @@ anime and manga bits are never set, and anime and manga are always excluded from
 manga* switch says; searching for them there finds nothing, while the other sources still answer. A Wallhaven picture
 has no title now, so its card shows the source's name.
 
+- The sources now load side by side, so the first pictures no longer wait for the slowest one, and up to eight
+  thumbnails load at once (dharmx/walls, whose thumbnails come from full-size pictures, takes at most three of them).
+
 ### A new source: dharmx/walls
 
 Explore and Home now include dharmx/walls, a collection of wallpapers on GitHub; `darwan wallpaper online walls` lists
