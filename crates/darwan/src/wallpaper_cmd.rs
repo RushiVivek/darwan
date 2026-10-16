@@ -286,7 +286,7 @@ pub fn online(
     use darwan_core::wallpaper::online::{Client, Query, Sort, Source};
 
     let src = Source::parse(source)
-        .ok_or_else(|| format!("no source {source:?}; use wallhaven, bing, apod or commons"))?;
+        .ok_or_else(|| format!("no source {source:?}; use wallhaven, bing, commons or walls"))?;
     let sort = match sort {
         "popular" => Sort::Popular,
         "latest" => Sort::Latest,

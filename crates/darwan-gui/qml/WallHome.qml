@@ -18,7 +18,7 @@ Flickable {
 
     readonly property WallFeed bing: WallFeed { backend: home.backend; channel: "home-bing" }
     readonly property WallFeed wallhaven: WallFeed { backend: home.backend; channel: "home-wallhaven" }
-    readonly property WallFeed apod: WallFeed { backend: home.backend; channel: "home-apod" }
+    readonly property WallFeed walls: WallFeed { backend: home.backend; channel: "home-walls" }
     readonly property WallFeed commons: WallFeed { backend: home.backend; channel: "home-commons" }
     readonly property WallFeed recent: WallFeed { backend: home.backend }
     onLibraryChanged: if (library) recent.set(library.items.slice(0, 16))
@@ -31,7 +31,7 @@ Flickable {
     Component.onCompleted: {
         backend.wallSearch("home-bing", JSON.stringify({ sources: ["bing"], first: 16 }))
         backend.wallSearch("home-wallhaven", JSON.stringify({ sources: ["wallhaven"], sort: "popular", first: 24 }))
-        backend.wallSearch("home-apod", JSON.stringify({ sources: ["apod"], first: 20 }))
+        backend.wallSearch("home-walls", JSON.stringify({ sources: ["walls"], first: 20 }))
         backend.wallSearch("home-commons", JSON.stringify({ sources: ["commons"], subject: "nature", first: 20 }))
     }
 
@@ -148,18 +148,18 @@ Flickable {
         WallRow {
             width: body.width
             title: "Popular on Wallhaven"
-            subtitle: "This year's favourites, each checked before it shows"
+            subtitle: "This year's favourites"
             feed: home.wallhaven
             onOpen: (item, index) => home.open(item, home.wallhaven.items, index)
             onSeeAll: home.seeAll("Wallhaven", ["wallhaven"], "")
         }
         WallRow {
             width: body.width
-            title: "Astronomy Picture of the Day"
-            subtitle: "From NASA, day by day"
-            feed: home.apod
-            onOpen: (item, index) => home.open(item, home.apod.items, index)
-            onSeeAll: home.seeAll("NASA APOD", ["apod"], "")
+            title: "From dharmx/walls"
+            subtitle: "A hand-picked collection"
+            feed: home.walls
+            onOpen: (item, index) => home.open(item, home.walls.items, index)
+            onSeeAll: home.seeAll("dharmx/walls", ["walls"], "")
         }
         WallRow {
             width: body.width

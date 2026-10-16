@@ -410,15 +410,16 @@ when something can't be done, e.g. a video with a tool that shows pictures only.
   `wallpapers`) in your Pictures folder, however your system names that. Thumbnails go to the shared
   `$XDG_CACHE_HOME/thumbnails` (`~/.cache/thumbnails`), so your file manager and Darwan make each one once, and every
   picture's colours are kept too, for the colour chips. **+** adds pictures to it.
-- **Explore** mixes Wallhaven (searchable), Bing's image of the day, NASA's Astronomy Picture of the Day and Wikimedia
-  Commons' featured pictures; the source chips narrow it to one. No account or key. The first 50 load at once, then
+- **Explore** mixes Wallhaven (searchable), Bing's image of the day, Wikimedia Commons' featured pictures and the
+  dharmx/walls collection on GitHub; the source chips narrow it to one. No account or key. The first 50 load at once, then
   25 more as you scroll. Pictures and responses are cached under `$XDG_CACHE_HOME/darwan`, so a second visit is quick.
   A picture you set is downloaded into your folder with its credit (author, licence, source page), shown with it,
   and marked DOWNLOADED from then on.
-- **Sexual content in any form is never shown**, from any source; there is no switch for it. People and portraits,
-  anime and manga, games, films and TV, war and weapons, gore and violence, and horror stay hidden until you allow
-  them under *Filter* (or with `wallpaper.allow`). Wallhaven pictures appear one by one, as each one's own tags pass
-  these checks.
+- **Sexual content is never shown from Wallhaven, Bing or Commons**; there is no switch for it. dharmx/walls is a
+  personal collection that Darwan does not word-check; its anime and manga folders follow the *Anime and manga* switch
+  and its `girl` folder the *People* switch. Wallhaven never offers anime or manga. People and portraits, anime and
+  manga, games, films and TV, war and weapons, gore and violence, and horror stay hidden until you allow them under
+  *Filter* (or with `wallpaper.allow`). Wallhaven is filtered in its own search, so its pictures load at once.
 - **Set Wallpaper** asks which display when you have several and your tool can give each its own. Afterwards,
   *Use on lockscreen too* makes your lock theme show your desktop wallpaper.
 - **Colours.** A shell that makes your colours from the wallpaper does so as usual, because Darwan sets it through
@@ -435,7 +436,7 @@ when something can't be done, e.g. a video with a tool that shows pictures only.
 | `wallpaper.colours` | any of `matugen` `pywal` `wallust` `hellwal`                  | none                     |
 
 From a terminal: `darwan wallpaper set <file>` (add `-o DP-1` for one screen), `darwan wallpaper status`,
-`darwan wallpaper online bing` (or `wallhaven lake`, `apod`, `commons --topic space`) with `--download 3 --set`.
+`darwan wallpaper online bing` (or `wallhaven lake`, `walls`, `commons --topic space`) with `--download 3 --set`.
 
 <a id="desktop-shells"></a>
 

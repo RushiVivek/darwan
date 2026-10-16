@@ -13,24 +13,24 @@ use super::filter::{self, Allowed};
 pub enum Source {
     Wallhaven,
     Bing,
-    Apod,
     Commons,
+    Walls,
 }
 
 impl Source {
     pub const ALL: [Source; 4] = [
         Source::Wallhaven,
         Source::Bing,
-        Source::Apod,
         Source::Commons,
+        Source::Walls,
     ];
 
     pub fn id(self) -> &'static str {
         match self {
             Source::Wallhaven => "wallhaven",
             Source::Bing => "bing",
-            Source::Apod => "apod",
             Source::Commons => "commons",
+            Source::Walls => "walls",
         }
     }
 
@@ -38,8 +38,8 @@ impl Source {
         match self {
             Source::Wallhaven => "Wallhaven",
             Source::Bing => "Bing",
-            Source::Apod => "NASA APOD",
             Source::Commons => "Wikimedia Commons",
+            Source::Walls => "dharmx/walls",
         }
     }
 
@@ -47,9 +47,9 @@ impl Source {
         Source::ALL.into_iter().find(|x| x.id() == s)
     }
 
-    // Only Wallhaven can be searched; the others are curated collections.
+    // Wallhaven is searched by its server, dharmx/walls by Darwan; the others are curated collections.
     pub fn searchable(self) -> bool {
-        self == Source::Wallhaven
+        matches!(self, Source::Wallhaven | Source::Walls)
     }
 }
 
@@ -87,7 +87,7 @@ impl Found {
         }
     }
 
-    // Unique across sources (APOD's ids are dates, Commons' page numbers).
+    // Unique across sources (Commons' ids are page numbers, dharmx/walls' paths).
     pub fn key(&self) -> String {
         format!("{}:{}", self.source.id(), self.id)
     }
@@ -227,7 +227,7 @@ pub struct Client {
 }
 
 impl Client {
-    // `cache`: ~/.cache/darwan/online, for responses, tag lists and thumbnails.
+    // `cache`: ~/.cache/darwan/online, for responses and thumbnails.
     pub fn new(cache: PathBuf) -> Self {
         let config = ureq::Agent::config_builder()
             .user_agent(USER_AGENT)
@@ -259,13 +259,15 @@ impl Client {
             .map_err(|e| format!("{}: {e}", host(url)))
     }
 
-    // A response kept for `ttl`, so browsing doesn't ask the source again (Pixabay-style caching rules, and APOD's
-    // small DEMO_KEY allowance).
-    fn cached(&self, key: &str, ttl: Duration, url: &str) -> Result<String, String> {
-        let file = self
-            .cache
+    fn response_file(&self, key: &str) -> PathBuf {
+        self.cache
             .join("responses")
-            .join(format!("{:016x}.json", crate::media::fnv1a(key.as_bytes())));
+            .join(format!("{:016x}.json", crate::media::fnv1a(key.as_bytes())))
+    }
+
+    // A response kept for `ttl`, so browsing doesn't ask the source again.
+    fn cached(&self, key: &str, ttl: Duration, url: &str) -> Result<String, String> {
+        let file = self.response_file(key);
         if let Ok(meta) = std::fs::metadata(&file)
             && meta
                 .modified()
@@ -303,8 +305,7 @@ impl Client {
         self.search_each(source, q, allowed, &mut |_| {})
     }
 
-    // As `search`, telling `each` about every result as soon as it has passed, so a grid can fill while Wallhaven's
-    // per-image checks are still running.
+    // As `search`, telling `each` about every result.
     pub fn search_each(
         &self,
         source: Source,
@@ -312,20 +313,12 @@ impl Client {
         allowed: &Allowed,
         each: &mut dyn FnMut(&Found),
     ) -> Result<Page, String> {
-        let page = self.search_all(source, q, allowed, each)?;
-        if source != Source::Wallhaven {
-            page.items.iter().for_each(&mut *each);
-        }
+        let page = self.search_all(source, q, allowed)?;
+        page.items.iter().for_each(&mut *each);
         Ok(page)
     }
 
-    fn search_all(
-        &self,
-        source: Source,
-        q: &Query,
-        allowed: &Allowed,
-        each: &mut dyn FnMut(&Found),
-    ) -> Result<Page, String> {
+    fn search_all(&self, source: Source, q: &Query, allowed: &Allowed) -> Result<Page, String> {
         if let Some(term) = filter::refusal(&q.text, allowed) {
             return Ok(Page {
                 refused: Some(term.to_string()),
@@ -333,7 +326,8 @@ impl Client {
             });
         }
         match source {
-            Source::Wallhaven => self.wallhaven(q, allowed, each),
+            Source::Wallhaven if wallhaven_skips(q) => Ok(Page::default()),
+            Source::Wallhaven => self.wallhaven(q, allowed),
             // Bing keeps about two weeks, all on the first page.
             Source::Bing if q.page > 1 => Ok(Page::default()),
             Source::Bing => {
@@ -349,34 +343,12 @@ impl Client {
                 items.dedup_by(|a, b| a.id == b.id);
                 Ok(keep(items, allowed))
             }
-            // Each page is 30 days further back; a past month never changes, so it's kept a month.
-            Source::Apod => {
-                let page = u64::from(q.page.max(1));
-                let (from, to) = (
-                    date_days_ago(30 * page),
-                    date_days_ago(30 * (page - 1) + u64::from(page > 1)),
-                );
-                let url = format!(
-                    "https://api.nasa.gov/planetary/apod?api_key=DEMO_KEY&start_date={from}&end_date={to}&thumbs=true"
-                );
-                let ttl = Duration::from_secs(if page == 1 { 12 * 3600 } else { 30 * 86400 });
-                let text = self.cached(&format!("apod {from} {to}"), ttl, &url)?;
-                let mut items = parse_apod(&text);
-                items.reverse();
-                let mut out = keep(items, allowed);
-                out.more = page < 24;
-                Ok(out)
-            }
             Source::Commons => self.commons(q, allowed),
+            Source::Walls => self.walls(q, allowed),
         }
     }
 
-    fn wallhaven(
-        &self,
-        q: &Query,
-        allowed: &Allowed,
-        each: &mut dyn FnMut(&Found),
-    ) -> Result<Page, String> {
+    fn wallhaven(&self, q: &Query, allowed: &Allowed) -> Result<Page, String> {
         let text = filter::clean_query(&q.text);
         let query = format!("{text} {}", filter::wallhaven_exclusions(allowed))
             .trim()
@@ -403,20 +375,7 @@ impl Client {
         } else {
             self.cached(&url, Duration::from_secs(3600), &url)?
         };
-        let (found, more) = parse_wallhaven_search(&body);
-        // Every image's tags are checked before it's shown; one that can't be checked isn't shown.
-        let items = found
-            .into_iter()
-            .filter_map(|mut f| {
-                let tags = self.wallhaven_tags(&f.id).ok()?;
-                if !tags_allowed(&tags, allowed) {
-                    return None;
-                }
-                name_from_tags(&mut f, &tags);
-                each(&f);
-                Some(f)
-            })
-            .collect();
+        let (items, more) = parse_wallhaven_search(&body, allowed);
         Ok(Page {
             items,
             refused: None,
@@ -424,27 +383,26 @@ impl Client {
         })
     }
 
-    // A wallpaper's tags, kept a week: moderators can change them, and the switches are applied to the list, so
-    // changing a switch needs no new request.
-    // Also kept in memory for the session: a picture checked once isn't read or parsed again.
-    fn wallhaven_tags(&self, id: &str) -> Result<Vec<Tag>, String> {
-        static SEEN: Mutex<Option<std::collections::HashMap<String, Vec<Tag>>>> = Mutex::new(None);
-        if let Some(tags) = SEEN.lock().unwrap().as_ref().and_then(|m| m.get(id)) {
-            return Ok(tags.clone());
-        }
-        let url = format!("https://wallhaven.cc/api/v1/w/{}", encode(id));
-        let text = self.cached(
-            &format!("wallhaven tags {id}"),
-            Duration::from_secs(7 * 86400),
-            &url,
-        )?;
-        let tags =
-            parse_wallhaven_tags(&text).ok_or_else(|| format!("wallhaven: no tags for {id}"))?;
-        SEEN.lock()
-            .unwrap()
-            .get_or_insert_with(Default::default)
-            .insert(id.to_string(), tags.clone());
-        Ok(tags)
+    // The whole repository listing, kept a day. GitHub allows 60 unauthenticated requests an hour per address and
+    // that may already be spent, so an old copy is better than an error.
+    fn walls(&self, q: &Query, allowed: &Allowed) -> Result<Page, String> {
+        let key = "walls tree";
+        let text = match self.cached(key, Duration::from_secs(86400), WALLS_TREE) {
+            Ok(text) => text,
+            Err(e) => std::fs::read_to_string(self.response_file(key)).map_err(|_| e)?,
+        };
+        let mut items = parse_walls(&text, allowed);
+        let words = query_words(&format!("{} {}", q.text, q.topic.as_deref().unwrap_or("")));
+        items.retain(|f| walls_match(&f.id, &words));
+        let day = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() / 86400);
+        let salt = if q.sort == Sort::Random {
+            "random"
+        } else {
+            "day"
+        };
+        Ok(walls_page(items, day, salt, q.page))
     }
 
     fn commons(&self, q: &Query, allowed: &Allowed) -> Result<Page, String> {
@@ -500,7 +458,14 @@ impl Client {
             found.source.id(),
             crate::media::fnv1a(found.id.as_bytes())
         ));
-        if !file.is_file() {
+        if file.is_file() {
+            return Ok(file);
+        }
+        if found.source == Source::Walls {
+            // dharmx/walls has no thumbnails, and its originals average 1 MB: the preview and the download reuse this one.
+            let original = self.full(found)?;
+            shrink(&original, &file)?;
+        } else {
             self.fetch_to(&found.thumb, &file)?;
         }
         Ok(file)
@@ -605,28 +570,6 @@ fn market() -> String {
     if tag.len() == 5 { tag } else { "en-US".into() }
 }
 
-fn date_days_ago(days: u64) -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
-        - days * 86400;
-    let (y, m, d) = civil(secs / 86400);
-    format!("{y:04}-{m:02}-{d:02}")
-}
-
-// Days since 1970-01-01 to a calendar date (Howard Hinnant's civil_from_days).
-fn civil(days: u64) -> (i64, u32, u32) {
-    let z = days as i64 + 719468;
-    let era = z.div_euclid(146097);
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (yoe + era * 400 + i64::from(m <= 2), m, d)
-}
-
 fn s(v: &Value, k: &str) -> String {
     v.get(k).and_then(Value::as_str).unwrap_or("").to_string()
 }
@@ -635,16 +578,8 @@ fn n(v: &Value, k: &str) -> u64 {
     v.get(k).and_then(Value::as_u64).unwrap_or(0)
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Tag {
-    pub name: String,
-    pub alias: String,
-    pub category: String,
-    pub purity: String,
-}
-
-// Only SFW, general-category results (the category bit is the uploader's; tags decide the rest).
-pub fn parse_wallhaven_search(text: &str) -> (Vec<Found>, bool) {
+// Only SFW results, general or (when people are allowed) people; never anime, whatever the query was.
+pub fn parse_wallhaven_search(text: &str, allowed: &Allowed) -> (Vec<Found>, bool) {
     let Ok(v) = serde_json::from_str::<Value>(text) else {
         return (Vec::new(), false);
     };
@@ -655,7 +590,11 @@ pub fn parse_wallhaven_search(text: &str) -> (Vec<Found>, bool) {
         .flatten()
         .filter(|d| {
             s(d, "purity") == "sfw"
-                && matches!(s(d, "category").as_str(), "general" | "anime" | "people")
+                && match s(d, "category").as_str() {
+                    "general" => true,
+                    "people" => allowed.has("people"),
+                    _ => false,
+                }
         })
         .map(|d| Found {
             source: Source::Wallhaven,
@@ -679,69 +618,6 @@ pub fn parse_wallhaven_search(text: &str) -> (Vec<Found>, bool) {
         })
         .collect();
     (items, more)
-}
-
-pub fn parse_wallhaven_tags(text: &str) -> Option<Vec<Tag>> {
-    let v: Value = serde_json::from_str(text).ok()?;
-    let data = &v["data"];
-    if s(data, "purity") != "sfw" {
-        return Some(vec![Tag {
-            name: "not sfw".into(),
-            alias: String::new(),
-            category: String::new(),
-            purity: s(data, "purity"),
-        }]);
-    }
-    Some(
-        data["tags"]
-            .as_array()?
-            .iter()
-            .map(|t| Tag {
-                name: s(t, "name"),
-                alias: s(t, "alias"),
-                category: s(t, "category"),
-                purity: s(t, "purity"),
-            })
-            .collect(),
-    )
-}
-
-// Wallhaven has no titles: the first few subject tags make one, and a photographer or artist tag is the author.
-pub fn name_from_tags(f: &mut Found, tags: &[Tag]) {
-    let credit = |t: &&Tag| {
-        matches!(
-            t.category.as_str(),
-            "Photographers" | "Artists" | "Artist" | "Photographer"
-        )
-    };
-    f.author = tags
-        .iter()
-        .filter(credit)
-        .map(|t| t.name.clone())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let subjects: Vec<&str> = tags
-        .iter()
-        .filter(|t| !credit(t))
-        .take(3)
-        .map(|t| t.name.as_str())
-        .collect();
-    if !subjects.is_empty() {
-        f.title = subjects.join(", ");
-    }
-}
-
-// Any non-SFW tag, a tag category the user hasn't allowed, or a refused word in a tag's name or aliases hides it.
-pub fn tags_allowed(tags: &[Tag], allowed: &Allowed) -> bool {
-    tags.iter().all(|t| {
-        t.purity == "sfw"
-            && !filter::refused_category(&t.category, allowed)
-            && filter::refusal(
-                &format!("{} {}", t.name, t.alias.replace(',', " ")),
-                allowed,
-            )
-            .is_none()
-    })
 }
 
 // Bing marks the images it offers as wallpapers (`wp`); the others aren't Darwan's to set.
@@ -780,46 +656,6 @@ pub fn parse_bing(text: &str) -> Vec<Found> {
                 bytes: 0,
                 colours: Vec::new(),
             }
-        })
-        .collect()
-}
-
-pub fn parse_apod(text: &str) -> Vec<Found> {
-    let Ok(v) = serde_json::from_str::<Value>(text) else {
-        return Vec::new();
-    };
-    v.as_array()
-        .into_iter()
-        .flatten()
-        .filter(|d| s(d, "media_type") == "image")
-        .filter_map(|d| {
-            let full = [s(d, "hdurl"), s(d, "url")]
-                .into_iter()
-                .find(|u| !u.is_empty())?;
-            let date = s(d, "date");
-            let copyright = s(d, "copyright").trim().replace('\n', " ");
-            Some(Found {
-                source: Source::Apod,
-                id: date.clone(),
-                title: s(d, "title"),
-                author: copyright.clone(),
-                licence: if copyright.is_empty() {
-                    "Public domain (NASA)".into()
-                } else {
-                    format!("© {copyright}")
-                },
-                licence_url: "https://apod.nasa.gov/apod/lib/about_apod.html".into(),
-                page: format!(
-                    "https://apod.nasa.gov/apod/ap{}.html",
-                    date.replace('-', "").get(2..).unwrap_or("")
-                ),
-                full,
-                thumb: s(d, "url"),
-                width: 0,
-                height: 0,
-                bytes: 0,
-                colours: Vec::new(),
-            })
         })
         .collect()
 }
@@ -900,6 +736,115 @@ pub fn parse_commons(text: &str, allowed: &Allowed) -> Vec<Found> {
         .collect()
 }
 
+const WALLS_TREE: &str = "https://api.github.com/repos/dharmx/walls/git/trees/main?recursive=1";
+const WALLS_PAGE: usize = 24;
+
+fn wallhaven_skips(q: &Query) -> bool {
+    filter::is_anime(&q.text) || q.topic.as_deref().is_some_and(filter::is_anime)
+}
+
+// The repository's pictures, minus folders the user's switches hide. The folders are the author's; there is no
+// word check on this source.
+pub fn parse_walls(text: &str, allowed: &Allowed) -> Vec<Found> {
+    let Ok(v) = serde_json::from_str::<Value>(text) else {
+        return Vec::new();
+    };
+    v["tree"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|e| s(e, "type") == "blob" && n(e, "size") <= 20 * 1024 * 1024)
+        .filter_map(|e| {
+            let path = s(e, "path");
+            let (folder, _) = path.split_once('/')?;
+            let (stem, ext) = path.rsplit('/').next()?.rsplit_once('.')?;
+            let gated = match folder.to_lowercase().as_str() {
+                "anime" | "manga" | "evangelion" | "boccha" => !allowed.has("anime"),
+                "girl" => !allowed.has("people"),
+                _ => false,
+            };
+            if folder.starts_with('.')
+                || gated
+                || !["jpg", "jpeg", "png", "webp"].contains(&ext.to_lowercase().as_str())
+            {
+                return None;
+            }
+            let url = path.split('/').map(encode).collect::<Vec<_>>().join("/");
+            let raw = format!("https://raw.githubusercontent.com/dharmx/walls/main/{url}");
+            Some(Found {
+                source: Source::Walls,
+                id: path.clone(),
+                title: stem.replace(['_', '-'], " "),
+                author: "dharmx".into(),
+                licence: "Collected by dharmx; pictures belong to their owners".into(),
+                licence_url: "https://github.com/dharmx/walls".into(),
+                page: format!("https://github.com/dharmx/walls/blob/main/{url}"),
+                full: raw.clone(),
+                thumb: raw,
+                width: 0,
+                height: 0,
+                bytes: n(e, "size"),
+                colours: Vec::new(),
+            })
+        })
+        .collect()
+}
+
+fn query_words(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+// "mountains" finds the folder "mountain": plurals are folded before comparing.
+fn walls_match(path: &str, words: &[String]) -> bool {
+    let fold = |w: &str| w.strip_suffix('s').unwrap_or(w).to_string();
+    let hay: Vec<String> = query_words(
+        &path
+            .rsplit_once('.')
+            .map_or(path, |p| p.0)
+            .replace('/', " "),
+    )
+    .iter()
+    .map(|w| fold(w))
+    .collect();
+    words.iter().all(|w| hay.contains(&fold(w)))
+}
+
+// There are no dates to sort by: a shuffle seeded by the day, so paging within a day never repeats a picture.
+fn walls_page(mut items: Vec<Found>, day: u64, salt: &str, page: u32) -> Page {
+    items.sort_by_key(|f| crate::media::fnv1a(format!("{day}{salt}{}", f.id).as_bytes()));
+    let start = (page.max(1) as usize - 1) * WALLS_PAGE;
+    let more = items.len() > start + WALLS_PAGE;
+    Page {
+        items: items.into_iter().skip(start).take(WALLS_PAGE).collect(),
+        refused: None,
+        more,
+    }
+}
+
+fn shrink(original: &Path, out: &Path) -> Result<(), String> {
+    let picture = image::open(original).map_err(|e| format!("{}: {e}", original.display()))?;
+    let picture = if picture.width() > 512 {
+        picture.resize(512, u32::MAX, image::imageops::FilterType::Triangle)
+    } else {
+        picture
+    };
+    let dir = out.parent().ok_or("no folder")?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let tmp = tempfile::NamedTempFile::new_in(dir).map_err(|e| e.to_string())?;
+    {
+        let mut w = std::io::BufWriter::new(tmp.as_file());
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut w, 85)
+            .encode_image(&picture.into_rgb8())
+            .map_err(|e| e.to_string())?;
+    }
+    tmp.persist(out).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn credit_file(credits: &Path, file: &Path) -> PathBuf {
     credits.join(format!(
         "{:016x}.json",
@@ -929,82 +874,160 @@ mod tests {
     }
 
     #[test]
-    fn wallhaven_results_are_sfw_only_and_the_uploaders_category_is_only_a_hint() {
+    fn wallhaven_results_are_sfw_only_and_anime_never_passes() {
         let text = r##"{"data":[
             {"id":"a1","purity":"sfw","category":"general","path":"https://w.wallhaven.cc/full/a1/wallhaven-a1.jpg","thumbs":{"large":"https://th/a1.jpg"},"dimension_x":3840,"dimension_y":2160,"file_size":5,"url":"https://wallhaven.cc/w/a1","colors":["#424153"]},
             {"id":"b2","purity":"sketchy","category":"general","path":"x","thumbs":{"large":"y"}},
-            {"id":"c3","purity":"nsfw","category":"people","path":"x","thumbs":{"large":"y"}}
+            {"id":"c3","purity":"nsfw","category":"people","path":"x","thumbs":{"large":"y"}},
+            {"id":"d4","purity":"sfw","category":"anime","path":"x","thumbs":{"large":"y"}},
+            {"id":"e5","purity":"sfw","category":"people","path":"x","thumbs":{"large":"y"}}
         ],"meta":{"current_page":1,"last_page":4}}"##;
-        let (items, more) = parse_wallhaven_search(text);
+        let ids = |a: &Allowed| {
+            parse_wallhaven_search(text, a)
+                .0
+                .into_iter()
+                .map(|f| f.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&none()), ["a1"]);
+        let everything = Allowed(filter::GROUPS.iter().map(|g| g.id.to_string()).collect());
         assert_eq!(
-            items.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(),
-            ["a1"]
+            ids(&everything),
+            ["a1", "e5"],
+            "people follow their switch; anime is dropped even with its switch on"
         );
+        let (items, more) = parse_wallhaven_search(text, &none());
         assert!(more);
         assert_eq!(items[0].file_name(), "wallhaven-a1.jpg");
-    }
-
-    fn tag(name: &str, category: &str, purity: &str) -> Tag {
-        Tag {
-            name: name.into(),
-            alias: String::new(),
-            category: category.into(),
-            purity: purity.into(),
-        }
+        assert_eq!(items[0].colours, ["#424153"]);
     }
 
     #[test]
-    fn a_wallhaven_image_is_shown_only_when_every_tag_passes() {
-        let ok = [
-            tag("Alex Mesmer", "Photographers", "sfw"),
-            tag("Seiganto-ji", "Architecture", "sfw"),
-        ];
-        assert!(tags_allowed(&ok, &none()));
-        // The research's probe: an SFW, "general" upload tagged women and school uniform, filed under Anime & Manga.
-        let probe = [
-            tag("women", "People", "sfw"),
-            tag("school uniform", "Clothing", "sfw"),
-            tag("anime girls", "Anime & Manga", "sfw"),
-        ];
-        assert!(!tags_allowed(&probe, &none()));
-        assert!(
-            tags_allowed(&probe, &Allowed(vec!["people".into(), "anime".into()])),
-            "with people and anime switched on nothing in it is refused"
-        );
-        let sketchy_tag = [tag("sunset", "Nature", "sketchy")];
-        assert!(
-            !tags_allowed(
-                &sketchy_tag,
-                &Allowed(filter::GROUPS.iter().map(|g| g.id.to_string()).collect())
-            ),
-            "a tag's own purity wins"
-        );
-        let alias = [Tag {
-            name: "Model".into(),
-            alias: "Sexy Woman, hot girls".into(),
-            category: "People".into(),
-            purity: "sfw".into(),
-        }];
-        assert!(
-            !tags_allowed(&alias, &Allowed(vec!["people".into()])),
-            "aliases are words too, and sexual ones never pass"
-        );
+    fn wallhaven_sends_no_request_for_an_anime_search() {
+        let q = |text: &str, topic: Option<&str>| Query {
+            text: text.into(),
+            topic: topic.map(str::to_string),
+            ..Query::default()
+        };
+        assert!(wallhaven_skips(&q("anime wallpaper", None)));
+        assert!(wallhaven_skips(&q("", Some("manga"))));
+        assert!(!wallhaven_skips(&q("mountain lake", Some("nature"))));
+    }
+
+    fn tree(entries: &[(&str, u64)]) -> String {
+        let blobs: Vec<String> = entries
+            .iter()
+            .map(|(p, s)| format!(r#"{{"path":"{p}","type":"blob","size":{s}}}"#))
+            .collect();
+        format!(
+            r#"{{"tree":[{{"path":"anime","type":"tree"}},{}],"truncated":false}}"#,
+            blobs.join(",")
+        )
     }
 
     #[test]
-    fn a_wallhaven_title_and_author_come_from_its_tags() {
-        let (mut items, _) = parse_wallhaven_search(
-            r#"{"data":[{"id":"w5","purity":"sfw","category":"general","path":"p","thumbs":{"large":"t"}}],"meta":{}}"#,
-        );
-        let tags = [
-            tag("Alex Mesmer", "Photographers", "sfw"),
-            tag("Seiganto-ji", "Architecture", "sfw"),
-            tag("waterfall", "Nature", "sfw"),
-        ];
-        name_from_tags(&mut items[0], &tags);
+    fn walls_folders_follow_the_switches_and_only_pictures_in_folders_are_kept() {
+        let text = tree(&[
+            ("README.md", 10),
+            (".github/banner.png", 10),
+            ("top.jpg", 10),
+            ("nature/Lake_view-1.JPG", 100),
+            ("nature/clip.mp4", 100),
+            ("nature/loop.gif", 100),
+            ("nature/notes.md", 100),
+            ("nature/huge.png", 20 * 1024 * 1024 + 1),
+            ("nature/big one.webp", 20 * 1024 * 1024),
+            ("anime/a.png", 100),
+            ("manga/m.png", 100),
+            ("evangelion/e.png", 100),
+            ("boccha/b.png", 100),
+            ("girl/g.png", 100),
+        ]);
+        let ids = |a: &Allowed| {
+            parse_walls(&text, a)
+                .into_iter()
+                .map(|f| f.id)
+                .collect::<Vec<_>>()
+        };
         assert_eq!(
-            (items[0].title.as_str(), items[0].author.as_str()),
-            ("Seiganto-ji, waterfall", "Alex Mesmer")
+            ids(&none()),
+            ["nature/Lake_view-1.JPG", "nature/big one.webp"]
+        );
+        let anime = ids(&Allowed(vec!["anime".into()]));
+        assert!(
+            [
+                "anime/a.png",
+                "manga/m.png",
+                "evangelion/e.png",
+                "boccha/b.png"
+            ]
+            .iter()
+            .all(|p| anime.iter().any(|a| a == p))
+                && !anime.contains(&"girl/g.png".to_string()),
+            "the anime switch opens the anime folders only: {anime:?}"
+        );
+        assert!(ids(&Allowed(vec!["people".into()])).contains(&"girl/g.png".to_string()));
+
+        let f = &parse_walls(&text, &none())[1];
+        assert_eq!(
+            f.full, "https://raw.githubusercontent.com/dharmx/walls/main/nature/big%20one.webp",
+            "a space in a path would break the download"
+        );
+        assert_eq!(f.title, "big one");
+        assert_eq!(f.bytes, 20 * 1024 * 1024);
+        let lake = &parse_walls(&text, &none())[0];
+        assert_eq!(lake.title, "Lake view 1");
+        assert_eq!(
+            lake.page,
+            "https://github.com/dharmx/walls/blob/main/nature/Lake_view-1.JPG"
+        );
+    }
+
+    #[test]
+    fn walls_search_matches_folder_and_name_words_and_forgives_plurals() {
+        let words = |s: &str| query_words(s);
+        assert!(walls_match("mountain/peak_one.jpg", &words("mountains")));
+        assert!(walls_match("mountain/peak_one.jpg", &words("PEAK")));
+        assert!(!walls_match(
+            "mountain/peak_one.jpg",
+            &words("mountains lake")
+        ));
+        assert!(walls_match("mountain/peak_one.jpg", &words("")));
+    }
+
+    #[test]
+    fn walls_pages_keep_one_order_through_the_day_without_repeats() {
+        let entries: Vec<(String, u64)> =
+            (0..60).map(|i| (format!("nature/p{i}.jpg"), 1)).collect();
+        let refs: Vec<(&str, u64)> = entries.iter().map(|(p, s)| (p.as_str(), *s)).collect();
+        let items = parse_walls(&tree(&refs), &none());
+        let first = walls_page(items.clone(), 20000, "day", 1);
+        let second = walls_page(items.clone(), 20000, "day", 2);
+        let third = walls_page(items.clone(), 20000, "day", 3);
+        assert_eq!(
+            (first.items.len(), second.items.len(), third.items.len()),
+            (24, 24, 12)
+        );
+        assert!(first.more && second.more && !third.more);
+        let all: std::collections::HashSet<&str> = [&first, &second, &third]
+            .iter()
+            .flat_map(|p| p.items.iter().map(|f| f.id.as_str()))
+            .collect();
+        assert_eq!(all.len(), 60, "no picture twice across pages");
+        assert_eq!(
+            walls_page(items.clone(), 20000, "day", 1).items,
+            first.items,
+            "the same day gives the same order"
+        );
+        assert_ne!(
+            walls_page(items.clone(), 20001, "day", 1).items,
+            first.items,
+            "a new day shuffles again"
+        );
+        assert_ne!(
+            walls_page(items, 20000, "random", 1).items,
+            first.items,
+            "random is its own order"
         );
     }
 
@@ -1023,22 +1046,6 @@ mod tests {
         );
         assert_eq!(f.author, "© jared lloyd/Getty Images");
         assert!(f.licence.contains("wallpaper only"));
-    }
-
-    #[test]
-    fn apod_skips_videos_and_names_the_copyright_holder_or_public_domain() {
-        let text = r#"[
-            {"copyright":"Jeff Dai","date":"2026-09-26","hdurl":"https://apod.nasa.gov/apod/image/2609/Big.jpg","media_type":"image","title":"Mirrored Meteor","url":"https://apod.nasa.gov/apod/image/2609/Small.jpg"},
-            {"date":"2026-09-27","media_type":"video","title":"A video","url":"https://youtube"},
-            {"date":"2026-09-28","hdurl":"https://apod/h.jpg","media_type":"image","title":"Nebula","url":"https://apod/s.jpg"}
-        ]"#;
-        let items = parse_apod(text);
-        assert_eq!(items.len(), 2);
-        assert_eq!(
-            (items[0].licence.as_str(), items[0].page.as_str()),
-            ("© Jeff Dai", "https://apod.nasa.gov/apod/ap260926.html")
-        );
-        assert_eq!(items[1].licence, "Public domain (NASA)");
     }
 
     #[test]
@@ -1074,17 +1081,15 @@ mod tests {
     }
 
     #[test]
-    fn dates_and_markets_are_what_the_apis_take() {
-        assert_eq!(civil(0), (1970, 1, 1));
-        assert_eq!(civil(20725), (2026, 9, 29));
+    fn queries_are_percent_encoded_for_the_apis() {
         assert_eq!(encode("mountain -women"), "mountain%20-women");
     }
 
     #[test]
     fn credits_are_kept_for_downloaded_files() {
         let d = tempfile::tempdir().unwrap();
-        let f = parse_apod(r#"[{"date":"2026-09-26","hdurl":"https://h.jpg","media_type":"image","title":"T","url":"https://s.jpg"}]"#).remove(0);
-        let file = d.path().join("apod-2026-09-26.jpg");
+        let f = parse_walls(&tree(&[("nature/lake.jpg", 1)]), &none()).remove(0);
+        let file = d.path().join("walls-nature-lake.jpg");
         save_credit(&d.path().join("credits"), &file, &f);
         assert_eq!(credit(&d.path().join("credits"), &file), Some(f));
     }

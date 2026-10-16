@@ -4,6 +4,24 @@ What changed in each release of Darwan, newest first. Each release's section is 
 
 ## Unreleased
 
+### Explore loads much faster
+
+Wallhaven is now filtered in its own search, so its pictures no longer wait for a check of each one's tags. The
+anime and manga bits are never set, and anime and manga are always excluded from its searches, whatever the *Anime and
+manga* switch says; searching for them there finds nothing, while the other sources still answer. A Wallhaven picture
+has no title now, so its card shows the source's name.
+
+### A new source: dharmx/walls
+
+Explore and Home now include dharmx/walls, a collection of wallpapers on GitHub; `darwan wallpaper online walls` lists
+it. It is searchable by folder and file name. Its pictures are not word-checked, but your switches still apply to its
+folders: `anime`, `manga`, `evangelion` and `boccha` need *Anime and manga*, and `girl` needs *People*. The list is
+kept for a day, and an old copy is used if GitHub's request limit has been spent.
+
+### NASA's Astronomy Picture of the Day is gone
+
+The source is removed from Explore, Home and `darwan wallpaper online`.
+
 ## 0.5.0 - 2026-09-30 02:12 +06:00
 
 ### Multi-monitor

@@ -178,7 +178,7 @@ enum WallpaperCmd {
     List,
     /// Make the thumbnails and colours the Wallpapers page shows, for the whole folder
     Prepare,
-    /// Browse free wallpapers online (wallhaven, bing, apod, commons); sexual content is never shown
+    /// Browse free wallpapers online (wallhaven, bing, commons, walls)
     Online {
         #[arg(default_value = "wallhaven")]
         source: String,

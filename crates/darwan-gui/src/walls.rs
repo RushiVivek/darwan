@@ -50,7 +50,7 @@ impl Channel {
 }
 
 // The feeds for a request. Every source unless the user picked one; search words and topics go to Wallhaven, and to
-// Commons and APOD when the topic is one of their subjects.
+// Commons when the topic is one of its subjects, and dharmx/walls, which filters them itself.
 pub fn feeds(sources: &[Source], query: &Query, topic: &str) -> Vec<Feed> {
     let feed = |source: Source, q: Query| Feed {
         source,
@@ -59,13 +59,13 @@ pub fn feeds(sources: &[Source], query: &Query, topic: &str) -> Vec<Feed> {
         more: true,
     };
     let searching = !query.text.trim().is_empty() || !topic.is_empty();
-    // The quick sources first; Wallhaven checks every picture before it shows, so it comes last.
+    // The quick sources first; Wallhaven is the slowest, so it comes last.
     let mut sources = sources.to_vec();
     sources.sort_by_key(|s| *s == Source::Wallhaven);
     sources
         .iter()
         .filter_map(|s| match s {
-            Source::Wallhaven => Some(feed(
+            Source::Wallhaven | Source::Walls => Some(feed(
                 *s,
                 Query {
                     text: if topic.is_empty() {
@@ -89,13 +89,6 @@ pub fn feeds(sources: &[Source], query: &Query, topic: &str) -> Vec<Feed> {
                         },
                     )
                 }),
-            Source::Apod
-                if !searching
-                    || topic == "space"
-                    || query.text.to_lowercase().contains("space") =>
-            {
-                Some(feed(*s, query.clone()))
-            }
             Source::Bing if !searching => Some(feed(*s, query.clone())),
             _ => None,
         })
@@ -294,6 +287,7 @@ pub fn found_json(f: &Found, thumbs: &HashMap<String, PathBuf>, folder: &Path) -
         "thumb": thumbs.get(&f.key()).map(|p| format!("file://{}", p.display())).unwrap_or_default(),
         "size": size_text(f.width, f.height),
         "bytes": megabytes(f.bytes),
+        "swatches": f.colours,
         "credit": credit_json(f),
         "downloaded": folder.join(f.file_name()).is_file(),
     })
@@ -486,11 +480,11 @@ mod tests {
 
     #[test]
     fn a_channel_shows_its_target_and_the_filter_shows_every_optional_group() {
-        let f = darwan_core::wallpaper::online::parse_apod(
-            r#"[{"copyright":"Jeff Dai","date":"2026-09-26","hdurl":"https://h.jpg","media_type":"image","title":"Meteor","url":"https://s.jpg"},
-                {"date":"2026-09-27","hdurl":"https://h2.jpg","media_type":"image","title":"Nebula","url":"https://s2.jpg"}]"#,
+        let f = darwan_core::wallpaper::online::parse_bing(
+            r#"{"images":[{"urlbase":"/a","copyright":"Lake (© Jeff Dai)","title":"Meteor","wp":true,"hsh":"1"},
+                {"urlbase":"/b","copyright":"Sky (© y)","title":"Nebula","wp":true,"hsh":"2"}]}"#,
         );
-        let mut c = Channel::new(feeds(&[Source::Apod], &Query::default(), ""), 1);
+        let mut c = Channel::new(feeds(&[Source::Bing], &Query::default(), ""), 1);
         c.items = f;
         c.feeds[0].more = false;
         let j = online(
@@ -505,8 +499,15 @@ mod tests {
             "only the target is shown"
         );
         assert_eq!(j["more"], true, "the rest is there for scrolling");
-        assert_eq!(j["items"][0]["credit"]["licence"], "© Jeff Dai");
-        assert_eq!(j["items"][0]["key"], "apod:2026-09-26");
+        assert_eq!(j["items"][0]["credit"]["author"], "© Jeff Dai");
+        assert_eq!(j["items"][0]["key"], "bing:1");
+        let mut tinted = c.items[0].clone();
+        tinted.colours = vec!["#424153".into()];
+        assert_eq!(
+            found_json(&tinted, &HashMap::new(), Path::new("/nowhere"))["swatches"],
+            json!(["#424153"]),
+            "the card tints its placeholder with them"
+        );
 
         let allowed = Allowed(vec!["anime".into()]);
         let e = explore(&allowed);
@@ -535,28 +536,38 @@ mod tests {
         let sources: Vec<Source> = space.iter().map(|f| f.source).collect();
         assert_eq!(
             sources,
-            [Source::Apod, Source::Commons, Source::Wallhaven],
-            "Bing can't be searched; APOD and Commons have space; Wallhaven, the slowest, comes last"
+            [Source::Commons, Source::Walls, Source::Wallhaven],
+            "Bing can't be searched; Commons has space and dharmx/walls filters itself; Wallhaven, the slowest, comes last"
         );
+        assert_eq!(space[1].query.text, "space");
         assert_eq!(space[2].query.text, "space");
 
         let mut two = Channel::new(
-            feeds(&[Source::Apod, Source::Bing], &Query::default(), ""),
+            feeds(&[Source::Commons, Source::Bing], &Query::default(), ""),
             10,
         );
+        let commons: Vec<Found> = c
+            .items
+            .iter()
+            .cloned()
+            .map(|f| Found {
+                source: Source::Commons,
+                ..f
+            })
+            .collect();
         let bing = darwan_core::wallpaper::online::parse_bing(
-            r#"{"images":[{"urlbase":"/a","copyright":"x (© y)","title":"A","wp":true,"hsh":"1"},{"urlbase":"/b","copyright":"x (© y)","title":"B","wp":true,"hsh":"2"}]}"#,
+            r#"{"images":[{"urlbase":"/a","copyright":"x (© y)","title":"A","wp":true,"hsh":"7"},{"urlbase":"/b","copyright":"x (© y)","title":"B","wp":true,"hsh":"8"}]}"#,
         );
-        two.items = [c.items.clone(), bing].concat();
+        two.items = [commons, bing].concat();
         let order: Vec<String> = mixed(&two.items).iter().map(|f| f.key()).collect();
         assert_eq!(
             order,
-            ["apod:2026-09-26", "bing:1", "apod:2026-09-27", "bing:2"],
+            ["commons:1", "bing:7", "commons:2", "bing:8"],
             "a round of every source reads as a mix"
         );
 
         // A placeholder, or a picture that failed to load, is left out.
-        let hidden = std::collections::HashSet::from(["bing:1".to_string()]);
+        let hidden = std::collections::HashSet::from(["bing:7".to_string()]);
         let shown = online(Some(&two), &HashMap::new(), Path::new("/nowhere"), &hidden);
         assert_eq!(shown["items"].as_array().unwrap().len(), 3);
     }

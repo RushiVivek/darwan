@@ -94,8 +94,6 @@ pub struct Group {
     // Provisional: the user decides later which start on; every group starts off for now.
     pub on_by_default: bool,
     pub terms: &'static [&'static str],
-    // Wallhaven's own tag categories, checked on every image's tags.
-    pub tag_categories: &'static [&'static str],
 }
 
 pub const GROUPS: &[Group] = &[
@@ -136,7 +134,6 @@ pub const GROUPS: &[Group] = &[
             "feet",
             "body",
         ],
-        tag_categories: &["People", "Clothing"],
     },
     Group {
         id: "anime",
@@ -153,21 +150,18 @@ pub const GROUPS: &[Group] = &[
             "vtuber",
             "chibi",
         ],
-        tag_categories: &["Anime & Manga"],
     },
     Group {
         id: "games",
         label: "Games",
         on_by_default: false,
         terms: &["video games", "video game", "gaming", "game art"],
-        tag_categories: &["Games"],
     },
     Group {
         id: "series",
         label: "Films and TV",
         on_by_default: false,
         terms: &["movies", "movie", "film stills", "tv series", "tv show"],
-        tag_categories: &["Series", "Movies"],
     },
     Group {
         id: "war",
@@ -178,7 +172,6 @@ pub const GROUPS: &[Group] = &[
             "sword", "soldier", "soldiers", "military", "army", "combat", "battle", "tank",
             "missile",
         ],
-        tag_categories: &["Military & Weapons"],
     },
     Group {
         id: "gore",
@@ -199,7 +192,6 @@ pub const GROUPS: &[Group] = &[
             "mutilation",
             "violence",
         ],
-        tag_categories: &[],
     },
     Group {
         id: "horror",
@@ -219,7 +211,6 @@ pub const GROUPS: &[Group] = &[
             "hanging",
             "suicide",
         ],
-        tag_categories: &[],
     },
 ];
 
@@ -271,11 +262,12 @@ pub fn refusal(text: &str, allowed: &Allowed) -> Option<&'static str> {
         .copied()
 }
 
-// A Wallhaven tag category the user hasn't allowed.
-pub fn refused_category(category: &str, allowed: &Allowed) -> bool {
-    allowed
-        .refused()
-        .any(|g| g.tag_categories.contains(&category))
+// Anime and manga never come from Wallhaven, whatever the switch: its own category is the uploader's call, so the
+// query is the only filter, and it can't exclude what the search asks for.
+pub fn is_anime(text: &str) -> bool {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|w| matches!(w, "anime" | "animes" | "manga" | "mangas"))
 }
 
 // Search text as Wallhaven gets it: letters, digits and spaces only, so `id:`, `like:`, `@user`, `+tag` and `-tag`
@@ -289,10 +281,14 @@ pub fn clean_query(text: &str) -> String {
         .join(" ")
 }
 
-// Terms Wallhaven should exclude itself (`-term`), so fewer results are fetched only to be hidden. Its query has a
-// length limit, so the most common offenders come first; the per-image tag check catches the rest.
+// Terms Wallhaven excludes itself (`-term`); nothing checks a picture's tags afterwards. Its query has a length
+// limit, so the terms that must never be dropped come first, then the most common offenders; the rest can't be caught.
 pub fn wallhaven_exclusions(allowed: &Allowed) -> String {
     const FIRST: &[&str] = &[
+        "anime",
+        "manga",
+        "anime girls",
+        "anime boys",
         "nude",
         "lingerie",
         "bikini",
@@ -308,7 +304,7 @@ pub fn wallhaven_exclusions(allowed: &Allowed) -> String {
     ];
     let mut terms: Vec<&str> = FIRST.to_vec();
     for g in allowed.refused() {
-        terms.extend(g.terms.iter().take(6));
+        terms.extend(g.terms.iter().take(6).filter(|t| !FIRST.contains(t)));
     }
     let mut out = String::new();
     for t in terms {
@@ -328,14 +324,9 @@ pub fn wallhaven_exclusions(allowed: &Allowed) -> String {
     out
 }
 
-// Wallhaven's categories bits (general, anime, people): anime and people only when the user allows them.
+// Wallhaven's categories bits (general, anime, people): people only when the user allows them, anime never.
 pub fn wallhaven_categories(allowed: &Allowed) -> &'static str {
-    match (allowed.has("anime"), allowed.has("people")) {
-        (false, false) => "100",
-        (true, false) => "110",
-        (false, true) => "101",
-        (true, true) => "111",
-    }
+    if allowed.has("people") { "101" } else { "100" }
 }
 
 #[cfg(test)]
@@ -411,22 +402,33 @@ mod tests {
     }
 
     #[test]
-    fn wallhaven_categories_and_tag_categories_follow_the_switches() {
+    fn wallhaven_never_gets_anime_and_people_follow_the_switch() {
         let none = Allowed::default();
         assert_eq!(wallhaven_categories(&none), "100");
-        assert!(refused_category("Anime & Manga", &none));
-        assert!(
-            refused_category("Clothing", &none),
-            "clothing tags belong to people, off by default"
+        assert_eq!(wallhaven_categories(&Allowed(vec!["people".into()])), "101");
+        assert_eq!(
+            wallhaven_categories(&all_groups()),
+            "101",
+            "the anime bit is never set, even with the anime switch on"
         );
-        let people = Allowed(vec!["people".into()]);
-        assert_eq!(wallhaven_categories(&people), "101");
-        assert!(!refused_category("People", &people));
         let ex = wallhaven_exclusions(&none);
         assert!(
-            ex.starts_with("-nude -lingerie") && ex.contains("-anime") && ex.len() <= 400,
+            ex.starts_with("-anime -manga -\"anime girls\" -\"anime boys\" -nude")
+                && ex.len() <= 400,
             "{ex}"
         );
-        assert!(!wallhaven_exclusions(&all_groups()).contains("-anime"));
+        let all = wallhaven_exclusions(&all_groups());
+        assert!(
+            all.contains("-anime") && all.contains("-manga"),
+            "no switch lets anime or manga through Wallhaven: {all}"
+        );
+    }
+
+    #[test]
+    fn anime_and_manga_words_are_found_whole() {
+        assert!(is_anime("Anime wallpaper"));
+        assert!(is_anime("shonen-manga, dark"));
+        assert!(!is_anime("manganese mine"));
+        assert!(!is_anime("animated sunset"));
     }
 }

@@ -55,7 +55,7 @@ Item {
                 width: Math.min(560, parent.width)
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
-                text: "Free from Wallhaven, Bing, NASA and Wikimedia Commons. Never anything sexual."
+                text: "Free from Wallhaven, Bing, Wikimedia Commons and dharmx/walls."
                 font.family: Style.family
                 font.pixelSize: 15
                 color: Qt.rgba(1, 1, 1, 0.78)
