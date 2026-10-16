@@ -99,10 +99,19 @@ impl Found {
             .chars()
             .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
             .collect();
-        // dharmx/walls' ids are paths, which can differ only in characters dropped above.
+        // dharmx/walls' ids are paths, read as words in the Library's titles; two can differ only in characters
+        // dropped here, so a hash keeps them apart.
         if self.source == Source::Walls {
+            let stem = self
+                .id
+                .rsplit_once('.')
+                .map_or(self.id.as_str(), |(s, _)| s);
+            let words: Vec<&str> = stem
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .filter(|w| !w.is_empty())
+                .collect();
             let hash = crate::media::fnv1a(self.id.as_bytes()) as u32;
-            return format!("walls-{safe}-{hash:08x}.{}", self.extension());
+            return format!("walls-{}-{hash:08x}.{}", words.join("-"), self.extension());
         }
         format!("{}-{safe}.{}", self.source.id(), self.extension())
     }
@@ -987,6 +996,12 @@ mod tests {
             "https://github.com/dharmx/walls/blob/main/nature/Lake_view-1.JPG"
         );
 
+        assert!(
+            lake.file_name().starts_with("walls-nature-Lake-view-1-")
+                && lake.file_name().ends_with(".jpg"),
+            "the Library titles a file by its name's words: {}",
+            lake.file_name()
+        );
         let mut twin = lake.clone();
         twin.id = "nature/Lakeview-1.JPG".into();
         assert_ne!(

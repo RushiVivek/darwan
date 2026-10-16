@@ -928,7 +928,8 @@ pub fn current(env: &Env, owner: &Owner, output: Option<&str>) -> Option<PathBuf
     let path_in = |text: String| -> Option<PathBuf> {
         let t = text.trim().trim_matches('\'').trim();
         let t = t.strip_prefix("file://").unwrap_or(t);
-        (!t.is_empty()).then(|| PathBuf::from(percent_decode(t)))
+        // Anything else is the tool explaining itself (DMS: "ERROR: …"), not a file.
+        t.starts_with('/').then(|| PathBuf::from(percent_decode(t)))
     };
     match owner.tool {
         Tool::Dms => match output {
@@ -1033,13 +1034,20 @@ fn percent_decode(s: &str) -> String {
 pub fn shows(env: &Env, owner: &Owner, req: &Request) -> Option<bool> {
     let want = std::fs::canonicalize(&req.path).unwrap_or_else(|_| req.path.clone());
     let same = |p: PathBuf| std::fs::canonicalize(&p).unwrap_or(p) == want;
+    let each = |outputs: &[String]| {
+        let mut all = true;
+        for out in outputs {
+            all &= same(current(env, owner, Some(out))?);
+        }
+        Some(all)
+    };
     match &req.target {
-        Target::Outputs(o) if owner.caps().per_output => {
-            let mut all = true;
-            for out in o {
-                all &= same(current(env, owner, Some(out))?);
-            }
-            Some(all)
+        Target::Outputs(o) if owner.caps().per_output => each(o),
+        // Set screen by screen (see `plan`), and its `get` refuses in this mode.
+        Target::All
+            if owner.tool == Tool::Dms && dms_per_monitor(env) && !req.outputs.is_empty() =>
+        {
+            each(&req.outputs)
         }
         _ => current(env, owner, None).map(same),
     }
@@ -1502,5 +1510,43 @@ mod tests {
             &["DP-1", "HDMI-A-1"],
         );
         assert_eq!(shows(&env, &o, &req), Some(false));
+    }
+
+    #[test]
+    fn dms_in_per_monitor_mode_is_asked_screen_by_screen_and_its_errors_are_not_paths() {
+        fn dms(_: &str, args: &[&str]) -> Option<String> {
+            Some(match args.last() {
+                Some(&"get") => {
+                    "ERROR: Per-monitor mode enabled. Use getFor(screenName) instead.".into()
+                }
+                _ => "/etc/hostname\n".into(),
+            })
+        }
+        let f = Fixture::new();
+        f.process(1, DMS, Some("wayland-1"));
+        f.write(
+            "state/DankMaterialShell/session.json",
+            r#"{"perMonitorWallpaper":true}"#,
+        );
+        let env = f.env(dms);
+        let o = found(&f);
+        assert_eq!(
+            current(&env, &o, None),
+            None,
+            "an error reply means DMS can't be asked, not that it shows a file called ERROR"
+        );
+        assert_eq!(
+            shows(
+                &env,
+                &o,
+                &all(Path::new("/etc/hostname"), &["DP-1", "DP-2"])
+            ),
+            Some(true),
+            "every screen was set with setFor, so every screen is read with getFor"
+        );
+        assert_eq!(
+            shows(&env, &o, &all(Path::new("/etc/passwd"), &["DP-1", "DP-2"])),
+            Some(false)
+        );
     }
 }
