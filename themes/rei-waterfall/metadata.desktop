@@ -1,0 +1,8 @@
+[SddmGreeterTheme]
+Name=rei-waterfall
+Description=Pixel Waterfall Qylock Theme
+Author=RushiVivek
+Type=sddm-theme
+MainScript=Main.qml
+ConfigFile=theme.conf
+QtVersion=6
