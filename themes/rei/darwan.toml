@@ -1,0 +1,33 @@
+name = "Rei"
+author = "RushiVivek"
+background = "video"
+background_file = "bg.mp4"
+
+[[option]]
+key = "layout"
+label = "Layout"
+type = "enum"
+choices = [
+  { value = "rise", label = "Rise: the clock lifts to the top-left, login on the left" },
+  { value = "corners", label = "Corners: the clock sinks to the bottom-left, login bottom-right" },
+]
+
+[[option]]
+key = "blur"
+label = "Blur while resting (0 = none)"
+type = "int"
+min = 0
+max = 64
+
+[supports]
+clock_format = true
+date_format = true
+background = true
+colors = true
+fonts = ["text", "clock"]
+motion = true
+
+[[color]]
+key = "colorMuted"
+label = "Secondary text"
+material = "on_surface_variant"

@@ -1,0 +1,7 @@
+[SddmGreeterTheme]
+Name=rei
+Description=Rei: a blurred clock that clears into the login
+Type=sddm-theme
+MainScript=Main.qml
+ConfigFile=theme.conf
+QtVersion=6
