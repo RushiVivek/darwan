@@ -10,6 +10,7 @@ pub mod hypridle;
 pub mod idle_shells;
 pub mod ini;
 pub mod lint;
+pub mod lyrics;
 pub mod manifest;
 pub mod media;
 pub mod palette;

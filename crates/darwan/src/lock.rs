@@ -225,6 +225,11 @@ fn tune(cmd: &mut Command) {
         .and_then(|c| c.saver_screen_off_locked().ok().flatten())
         .unwrap_or(saver::ScreenOffLocked::DEFAULT);
     cmd.env("DARWAN_SCREEN_OFF_LOCKED", screen_off.to_string());
+    let power = config
+        .as_ref()
+        .and_then(|c| c.saver_screen_off_power().ok().flatten())
+        .unwrap_or(saver::ScreenOffPower::DEFAULT);
+    cmd.env("DARWAN_SCREEN_OFF_POWER", power.as_str());
     let quality = config
         .as_ref()
         .and_then(|c| c.saver_quality().ok().flatten())

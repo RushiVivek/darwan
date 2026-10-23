@@ -15,6 +15,7 @@ ShellRoot {
     readonly property int returnAfter: parseInt(Quickshell.env("DARWAN_RETURN_AFTER")) || 30000
     property bool ambient: saver
     property var hosts: []
+    readonly property NowPlaying nowPlaying: NowPlaying {}
 
     function quit() {
         for (const h of hosts)
@@ -80,6 +81,7 @@ ShellRoot {
                 sessionList: JSON.parse(Quickshell.env("DARWAN_SESSIONS") || "[]")
                 authBackend: root.usePam ? pamLoader.item : mock
                 ambient: root.ambient
+                nowPlaying: root.nowPlaying
                 onUnlocked: {
                     console.log("darwan: unlocked")
                     root.quit()

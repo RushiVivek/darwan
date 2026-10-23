@@ -173,6 +173,8 @@ enum Event {
     Activity,
     LockedIdle,
     LockedActive,
+    // Plugged in when the lock went idle with saver.screen_off_power = battery: look at the power again.
+    LockedIdleRecheck,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -214,6 +216,8 @@ pub fn run() -> ExitCode {
     let mut watching_locked = false;
     // Darwan turned the outputs off, so Darwan turns them on again.
     let mut screens_off = false;
+    // The lock has sat untouched for saver.screen_off_locked; cleared by any input.
+    let mut locked_idle = false;
     let mut first = true;
     loop {
         let mut cmd = qs::command(&paths, "lock_shell.qml", &[]);
@@ -287,20 +291,23 @@ pub fn run() -> ExitCode {
                     let _ = ack.send(());
                     check = None;
                 }
-                Ok(Event::LockedIdle) => match &screen.commands {
-                    Some((off, _)) => {
-                        log(format!(
-                            "locked and untouched for {} s: turning the screens off",
-                            screen.after_ms.unwrap_or_default() / 1000
-                        ));
-                        screens_off = run_shell(off);
+                Ok(Event::LockedIdle) => {
+                    locked_idle = true;
+                    match &screen.commands {
+                        Some(_) => screen_off_if_allowed(&screen, &mut screens_off, &tx, log),
+                        None => log(
+                            "locked and untouched, but only Hyprland's screens can be turned off"
+                                .into(),
+                        ),
                     }
-                    None => log(
-                        "locked and untouched, but only Hyprland's screens can be turned off"
-                            .into(),
-                    ),
-                },
+                }
+                Ok(Event::LockedIdleRecheck) => {
+                    if locked_idle && !screens_off {
+                        screen_off_if_allowed(&screen, &mut screens_off, &tx, log);
+                    }
+                }
                 Ok(Event::LockedActive) => {
+                    locked_idle = false;
                     if screens_off && let Some((_, on)) = &screen.commands {
                         log("input: turning the screens on".into());
                         run_shell(on);
@@ -397,11 +404,41 @@ pub fn run() -> ExitCode {
     }
 }
 
-// A hung locker must not hang the supervisor, so every call has a deadline.
-// saver.screen_off_locked, from the environment `darwan lock` gives the supervisor, and the commands for it.
+// saver.screen_off_locked and saver.screen_off_power, from the environment `darwan lock` gives the supervisor, and
+// the commands for it.
 struct ScreenOff {
     after_ms: Option<u32>,
     commands: Option<(String, String)>,
+    battery_only: bool,
+}
+
+// How often a plugged-in, untouched lock looks again whether it is on battery now.
+const POWER_RECHECK: Duration = Duration::from_secs(30);
+
+// Turns the screens off when the power setting allows it now; otherwise looks again later, in case of an unplug.
+fn screen_off_if_allowed(
+    screen: &ScreenOff,
+    screens_off: &mut bool,
+    tx: &Sender<Event>,
+    log: impl Fn(String),
+) {
+    let Some((off, _)) = &screen.commands else {
+        return;
+    };
+    if !screen.allows(darwan_core::hardware::on_battery()) {
+        log("locked and untouched, but plugged in: the screens stay on (saver.screen_off_power = battery)".into());
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(POWER_RECHECK);
+            let _ = tx.send(Event::LockedIdleRecheck);
+        });
+        return;
+    }
+    log(format!(
+        "locked and untouched for {} s: turning the screens off",
+        screen.after_ms.unwrap_or_default() / 1000
+    ));
+    *screens_off = run_shell(off);
 }
 
 impl ScreenOff {
@@ -410,8 +447,14 @@ impl ScreenOff {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(darwan_core::saver::ScreenOffLocked::DEFAULT);
+        let power = std::env::var("DARWAN_SCREEN_OFF_POWER")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(darwan_core::saver::ScreenOffPower::DEFAULT);
         let hyprland = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some();
-        Self::new(setting, hyprland, darwan_core::hypridle::hyprland_lua())
+        let mut s = Self::new(setting, hyprland, darwan_core::hypridle::hyprland_lua());
+        s.battery_only = power == darwan_core::saver::ScreenOffPower::Battery;
+        s
     }
 
     fn new(setting: darwan_core::saver::ScreenOffLocked, hyprland: bool, lua: bool) -> Self {
@@ -419,7 +462,13 @@ impl ScreenOff {
         Self {
             after_ms: setting.secs().map(|s| s.saturating_mul(1000)),
             commands: hyprland.then(|| (dpms(lua, false), dpms(lua, true))),
+            battery_only: false,
         }
+    }
+
+    // `on_battery` is UPower's answer; when it can't be asked, a battery-only setting keeps the screens on.
+    fn allows(&self, on_battery: Option<bool>) -> bool {
+        !self.battery_only || on_battery == Some(true)
     }
 }
 
@@ -1001,6 +1050,20 @@ mod tests {
             None,
             "no way to turn another compositor's screens off yet"
         );
+    }
+
+    #[test]
+    fn a_battery_only_lock_turns_the_screen_off_only_on_battery() {
+        use darwan_core::saver::ScreenOffLocked;
+        let mut s = ScreenOff::new(ScreenOffLocked::DEFAULT, true, false);
+        assert!(
+            s.allows(Some(false)) && s.allows(None),
+            "always: plugged in too"
+        );
+        s.battery_only = true;
+        assert!(s.allows(Some(true)));
+        assert!(!s.allows(Some(false)), "plugged in: the screens stay on");
+        assert!(!s.allows(None), "no UPower to ask: stay on");
     }
 
     #[test]

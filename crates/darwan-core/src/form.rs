@@ -2,7 +2,7 @@ use crate::catalog::Theme;
 use crate::config::UserConfig;
 use crate::custom::{self, Area, Kind};
 use crate::manifest::OptionKind;
-use crate::saver::{self, LockAfter, Quality, ScreenOffLocked};
+use crate::saver::{self, LockAfter, Quality, ScreenOffLocked, ScreenOffPower};
 use crate::settings::{self, Key};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -223,9 +223,25 @@ pub fn fields(theme: &Theme, config: &UserConfig) -> Vec<Field> {
         key: Key::SaverScreenOffLocked,
         label: "Untouched lock turns the screen off".into(),
         kind: FieldKind::Choice(screen_off_locked_choices(&off)),
-        value: off,
+        value: off.clone(),
         is_set: off_set,
         disabled: None,
+        group: None,
+    });
+    let (power, power_set) = current(&Key::SaverScreenOffPower, ScreenOffPower::DEFAULT.as_str());
+    out.push(Field {
+        key: Key::SaverScreenOffPower,
+        label: "Turn the screen off".into(),
+        kind: FieldKind::Choice(
+            ScreenOffPower::ALL
+                .iter()
+                .map(|p| (p.as_str().to_string(), p.describe().to_string()))
+                .collect(),
+        ),
+        value: power,
+        is_set: power_set,
+        disabled: (off == "never")
+            .then(|| "only when an untouched lock turns the screen off".into()),
         group: None,
     });
     let (quality, quality_set) = current(&Key::SaverQuality, Quality::DEFAULT.as_str());

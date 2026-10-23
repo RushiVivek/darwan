@@ -396,6 +396,7 @@ impl qobject::Backend {
             "lock" => self.set_value(&QString::from("saver.lock_after"), value),
             "returnAfter" => self.set_value(&QString::from("saver.return_after"), value),
             "screenOffLocked" => self.set_value(&QString::from("saver.screen_off_locked"), value),
+            "screenOffPower" => self.set_value(&QString::from("saver.screen_off_power"), value),
             "quality" => self.set_value(&QString::from("saver.quality"), value),
             "start" => self.idle_start(),
             "check" => self.recheck_idle(),

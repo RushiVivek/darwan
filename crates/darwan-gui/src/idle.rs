@@ -4,7 +4,7 @@ use darwan_core::config::UserConfig;
 use darwan_core::form;
 use darwan_core::hypridle::{self, Conf, Hypridle, Listener, Setup, runs_command};
 use darwan_core::idle_shells::{Shell, span};
-use darwan_core::saver::{self, LockAfter, Quality, ScreenOffLocked};
+use darwan_core::saver::{self, LockAfter, Quality, ScreenOffLocked, ScreenOffPower};
 use serde_json::{Value, json};
 
 // Everything the Screensaver window shows: hypridle's state, its settings, and darwan's saver settings.
@@ -309,6 +309,7 @@ fn summary(
     conf: Option<&Value>,
     lock_after: &str,
     locked_off: Option<u32>,
+    power: ScreenOffPower,
     problem: &str,
 ) -> String {
     let c = match (problem, conf) {
@@ -332,6 +333,9 @@ fn summary(
     }];
     parts.push(match (secs("screenOff"), locked_off) {
         (Some(s), _) => format!("screen off after {}", span(s)),
+        (None, Some(l)) if power == ScreenOffPower::Battery => {
+            format!("screen off {} after locking, on battery", span(l))
+        }
         (None, Some(l)) => format!("screen off {} after locking", span(l)),
         (None, None) => "screen stays on".into(),
     });
@@ -368,6 +372,11 @@ pub fn panel(setup: &Setup, conf: Option<&Hypridle>, config: &UserConfig) -> Val
         .unwrap_or(ScreenOffLocked::DEFAULT);
     let locked_off_secs = locked_off.secs().filter(|_| setup.hyprland);
     let locked_off = locked_off.to_string();
+    let power = config
+        .saver_screen_off_power()
+        .ok()
+        .flatten()
+        .unwrap_or(ScreenOffPower::DEFAULT);
     let q = QUALITIES
         .iter()
         .find(|q| q.0 == quality)
@@ -376,7 +385,7 @@ pub fn panel(setup: &Setup, conf: Option<&Hypridle>, config: &UserConfig) -> Val
         "ready": problem.is_empty(),
         "problem": problem,
         "running": setup.running,
-        "summary": summary(c, &lock_after, locked_off_secs, problem),
+        "summary": summary(c, &lock_after, locked_off_secs, power, problem),
         "warn": !problem.is_empty(),
         "setup": setup_card(setup, c, problem),
         "timeline": c.map_or(Value::Null, |c| timeline(c, &lock_after)),
@@ -403,6 +412,11 @@ pub fn panel(setup: &Setup, conf: Option<&Hypridle>, config: &UserConfig) -> Val
         } else {
             "Hyprland only for now"
         },
+        "screenOffPower": power.as_str(),
+        "screenOffPowers": ScreenOffPower::ALL
+            .iter()
+            .map(|p| json!({ "value": p.as_str(), "label": if *p == ScreenOffPower::Always { "Always" } else { "On battery" } }))
+            .collect::<Vec<_>>(),
         "hyprland": setup.hyprland,
         "collisions": setup.shells.iter().map(Shell::describe).collect::<Vec<_>>(),
         "quality": quality,
@@ -591,6 +605,20 @@ mod tests {
             "[saver]\nscreen_off_locked = \"never\"\n",
         );
         assert!(p["summary"].as_str().unwrap().contains("screen stays on"));
+        let p = panel_for(
+            &setup(),
+            Some(&text),
+            "[saver]\nscreen_off_power = \"battery\"\n",
+        );
+        assert_eq!(p["screenOffPower"], "battery");
+        assert!(
+            p["summary"]
+                .as_str()
+                .unwrap()
+                .contains("screen off 5 min after locking, on battery"),
+            "{}",
+            p["summary"]
+        );
     }
 
     // A shell timer nobody sees in Darwan is how the screen went dark at 20 min with Screen off at Never.

@@ -4,6 +4,21 @@ What changed in each release of Darwan, newest first. Each release's section is 
 
 ## Unreleased
 
+### Lyrics on the screensaver
+
+NieR: Automata's screensaver now shows a big clock, the date and what is playing, with the line being sung and the
+next one, and an *Audio log* in the corner with the track, the artist and a progress bar. As the lock wakes, the big
+clock glides into the HUD's own. Lyrics come from a `.lrc` file beside the track, or the lyrics tags in the file
+(`SYNCEDLYRICS`, `LYRICS`), else the plain lyrics your player sends, else [LRCLIB](https://lrclib.net): the title,
+artist, album and length are sent there, and each answer (a miss too) is kept a day under `~/.cache/darwan/lyrics`.
+Timed lyrics follow the song. Any theme can show them through `darwan.nowPlaying` (see the theme contract).
+
+### The screen off only on battery
+
+`saver.screen_off_power = "battery"` keeps an untouched lock's screens on while plugged in, and turns them off after
+`saver.screen_off_locked` only on battery; unplugging while locked turns them off within half a minute. It's under
+⚙ → *Screensaver* → *When you lock* → *Only on battery* in the GUI. The default, `always`, is as before.
+
 ## 0.6.0 - 2026-10-17 00:35 +06:00
 
 ### Explore loads much faster

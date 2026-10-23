@@ -23,6 +23,11 @@ pub fn command(paths: &Paths, shell: &str, wrapper: &[String]) -> Command {
 pub fn runtime_env(cmd: &mut Command, paths: &Paths) {
     cmd.current_dir(paths.runtime())
         .env("QML_XHR_ALLOW_FILE_READ", "1")
+        // The runtime asks this binary for lyrics; a checkout's, not whichever `darwan` is on PATH.
+        .env(
+            "DARWAN_BIN",
+            std::env::current_exe().unwrap_or_else(|_| "darwan".into()),
+        )
         .env("QML2_IMPORT_PATH", paths.qml_import_path());
 }
 

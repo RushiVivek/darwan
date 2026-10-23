@@ -108,6 +108,49 @@ impl fmt::Display for ScreenOffLocked {
     }
 }
 
+// saver.screen_off_power: whether that untouched lock turns the screen off on mains power too, or only on battery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreenOffPower {
+    Always,
+    Battery,
+}
+
+impl ScreenOffPower {
+    pub const DEFAULT: Self = ScreenOffPower::Always;
+    pub const ALL: [ScreenOffPower; 2] = [ScreenOffPower::Always, ScreenOffPower::Battery];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ScreenOffPower::Always => "always",
+            ScreenOffPower::Battery => "battery",
+        }
+    }
+
+    pub fn describe(self) -> &'static str {
+        match self {
+            ScreenOffPower::Always => "on battery and plugged in",
+            ScreenOffPower::Battery => "only on battery; plugged in, the screen stays on",
+        }
+    }
+}
+
+impl FromStr for ScreenOffPower {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        ScreenOffPower::ALL
+            .into_iter()
+            .find(|p| p.as_str() == s)
+            .ok_or_else(|| format!("saver.screen_off_power is always or battery, not {s:?}"))
+    }
+}
+
+impl fmt::Display for ScreenOffPower {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Quality {
     Auto,
@@ -214,6 +257,19 @@ mod tests {
         );
         assert!(check_return_after(-30).is_err());
         assert!(check_return_after(i64::from(u32::MAX) + 1).is_err());
+    }
+
+    #[test]
+    fn screen_off_power_round_trips_and_defaults_to_always() {
+        for p in ScreenOffPower::ALL {
+            assert_eq!(p.as_str().parse(), Ok(p));
+        }
+        assert_eq!(
+            ScreenOffPower::DEFAULT,
+            ScreenOffPower::Always,
+            "unset keeps the behaviour from before the setting"
+        );
+        assert!("ac".parse::<ScreenOffPower>().is_err());
     }
 
     #[test]

@@ -364,7 +364,8 @@ Item {
     }
 
     // ── Power and session ──
-    // Power and reboot on both screens; the session picker only under SDDM.
+    // Power and reboot on both screens, whatever SDDM's canPowerOff/canReboot say (its test mode and some logind
+    // setups report false); the session picker only under SDDM.
     Row {
         id: actions
         spacing: 48 * root.s
@@ -379,7 +380,7 @@ Item {
             ]
             delegate: Text {
                 required property var modelData
-                visible: typeof sddm !== "undefined" && (modelData.reboot ? sddm.canReboot : sddm.canPowerOff)
+                visible: typeof sddm !== "undefined"
                 text: modelData.label
                 font.family: root.textFont
                 font.pixelSize: 14 * root.s

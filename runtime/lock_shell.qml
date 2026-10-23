@@ -61,6 +61,8 @@ ShellRoot {
     property var hosts: []
     // Without darwan's plugin there is nothing to catch the waking input: no ambient mode, and a saver locks at once.
     property bool gateMissing: false
+    // One for every screen's theme.
+    readonly property NowPlaying nowPlaying: NowPlaying {}
 
     // Exit codes the supervisor reads: 0 authenticated, 4 the unlocked saver ended, anything else restarts it locked.
     function leave(code) {
@@ -370,6 +372,7 @@ ShellRoot {
                 authBackend: PamAuth {}
                 ambient: root.ambient && !root.warming && !root.gateMissing
                 mediaTier: slotContent.modelData === root.primaryScreen ? root.mediaTier : root.secondaryTier
+                nowPlaying: root.nowPlaying
                 // Unload before quitting: a playing video crashes Qt's FFmpeg backend on exit.
                 onUnlocked: {
                     unload()

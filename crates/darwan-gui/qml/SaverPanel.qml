@@ -387,6 +387,17 @@ Column {
                     onPicked: v => panel.backend.saverDo("screenOffLocked", v)
                 }
             }
+            SettingRow {
+                width: parent.width
+                label: "Only on battery"
+                sub: "Plugged in, a lock keeps the screen on"
+                off: !panel.p.hyprland || panel.p.screenOffLocked === "never"
+                Toggle {
+                    enabled: panel.p.hyprland && panel.p.screenOffLocked !== "never"
+                    on: panel.p.screenOffPower === "battery"
+                    onFlipped: v => panel.backend.saverDo("screenOffPower", v ? "battery" : "always")
+                }
+            }
         }
         Column {
             width: panel.wide ? (parent.width - 28) / 2 : parent.width

@@ -384,6 +384,7 @@ password prompt). Waking from sleep never shows the screensaver either.
 | `saver.lock_after`        | seconds, or `never`               | `10`    | how long the screensaver waits before it locks; `0` locks as it appears                                          |
 | `saver.return_after`      | seconds, `5` or more              | `30`    | how long a lock left untouched keeps its widgets before the screensaver comes back; not while something is typed |
 | `saver.screen_off_locked` | seconds, `10` or more, or `never` | `300`   | how long a lock left untouched keeps the screens on (Hyprland)                                                   |
+| `saver.screen_off_power`  | `always` `battery`                | `always` | whether that untouched lock turns the screens off plugged in too, or only on battery                            |
 | `saver.quality`           | `full` `auto` `eco` `still`       | `full`  | what videos play: as shipped, chosen for you, at up to 1080p and 30 fps, or a still frame                        |
 
 `full` plays every video as shipped, on every monitor: the smoothest, and the most GPU work, power and memory. `auto`
@@ -560,6 +561,7 @@ format = "ddd, MMM d"   # one of the presets below; unset, each theme keeps its 
 lock_after = 10         # seconds from the screensaver to the lock, or "never"; 0 locks at once
 return_after = 30       # seconds an untouched lock keeps its widgets before the screensaver comes back; 5 or more
 screen_off_locked = 300 # seconds an untouched lock keeps the screens on, or "never"; 10 or more (Hyprland)
+screen_off_power = "always" # "always" | "battery": plugged in, a "battery" lock keeps the screens on
 quality = "full"        # "full" | "auto" | "eco" | "still"
 
 [gui]

@@ -150,6 +150,26 @@ Rules:
   GPU that renders, silent and looping; the user's `saver.quality` picks the tier: `full`, `eco` (a copy at up to 1080p
   and 30 fps, made when the theme is picked) or `still` (the first frame). A hidden `VideoOutput` pauses.
 
+## Now playing
+
+Under darwan's Quickshell hosts (the lock, the screensaver and `darwan preview`), `darwan.nowPlaying` follows the MPRIS
+player that is playing; it is `null` under SDDM and in the GUI, so check it first. Its lyrics come from a `.lrc` beside
+the track, else the file's `SYNCEDLYRICS`/`LYRICS` tags, else the player's own plain text, else lrclib.net (cached a
+day, misses too; only for tracks with an artist).
+
+| Property | What it gives |
+|---|---|
+| `active`, `playing` | a track is loaded; it is playing |
+| `title`, `artist`, `album` | the track |
+| `position`, `length`, `progress` | seconds in, seconds long (0 when unknown), 0 to 1; updated twice a second while playing |
+| `lines`, `synced` | `[{ t, text }]`, `t` in ms (null for plain lyrics); whether the lines are timed |
+| `index`, `current`, `next` | the line being sung (-1 and `""` before the first, or for plain lyrics) and the one after |
+
+```qml
+readonly property QtObject np: typeof darwan !== "undefined" && darwan.nowPlaying ? darwan.nowPlaying : null
+Text { visible: np !== null && np.active; text: np ? np.current : ""; opacity: 1 - saver.wake }
+```
+
 ## Rules the checks enforce
 
 `darwan check --all` fails a theme on any QML warning or error. `darwan check --all --no-fonts` hides `font/` and fails on any visible text whose `font.family` is empty.

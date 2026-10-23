@@ -9,7 +9,7 @@ use darwan_core::catalog::{Catalog, Theme};
 use darwan_core::config::{Target, UserConfig};
 use darwan_core::form::{self, Field, FieldKind};
 use darwan_core::paths::{self, Paths};
-use darwan_core::saver::Quality;
+use darwan_core::saver::{Quality, ScreenOffPower};
 use darwan_core::settings::{DATE_PRESETS, Key};
 
 pub const VAR: &str = "DARWAN_COMPLETE";
@@ -126,6 +126,10 @@ fn keys_in(catalog: &Catalog) -> Vec<CompletionCandidate> {
         candidate(
             "saver.screen_off_locked",
             "Seconds an untouched lock waits before the screen turns off, or never",
+        ),
+        candidate(
+            "saver.screen_off_power",
+            "When an untouched lock turns the screen off: always, or only on battery",
         ),
         candidate(
             "saver.quality",
@@ -275,6 +279,10 @@ fn values_for(catalog: &Catalog, config: &UserConfig, key: &str) -> Vec<Completi
             candidate("600", "ten minutes"),
             candidate("never", "the screen stays on while locked"),
         ],
+        Key::SaverScreenOffPower => ScreenOffPower::ALL
+            .iter()
+            .map(|p| candidate(p.as_str(), p.describe()))
+            .collect(),
         Key::SaverQuality => Quality::ALL
             .iter()
             .map(|q| candidate(q.as_str(), q.describe()))

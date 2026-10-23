@@ -18,6 +18,8 @@ Item {
     property bool ambient: false
     // "full", "eco" or "still": what darwan's VideoOutput plays (docs/theme-contract.md, "Screensaver").
     property string mediaTier: "full"
+    // The shell's NowPlaying, when it has one (Quickshell hosts); null in the GUI and SDDM.
+    property QtObject nowPlaying: null
 
     readonly property bool themeReady: themeLoader.status === Loader.Ready
     readonly property bool usingFallback: (configReady && themePath === "") || themeLoader.status === Loader.Error || loadTimer.expired
@@ -69,6 +71,7 @@ Item {
 
     readonly property QtObject darwan: QtObject {
         readonly property bool ambient: host.ambient
+        readonly property QtObject nowPlaying: host.nowPlaying
     }
 
     readonly property QtObject sddm: QtObject {

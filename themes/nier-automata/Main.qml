@@ -1097,6 +1097,189 @@ Rectangle {
     }
 
     // Action
+    // ── SCREENSAVER: clock, lyrics and what is playing ─────────────────────
+    // Shown only while the HUD rests (saver.wake 0); SDDM has no screensaver, so it never shows there.
+    readonly property QtObject nowPlaying: typeof darwan !== "undefined" && darwan.nowPlaying ? darwan.nowPlaying : null
+    readonly property bool hasTrack: nowPlaying !== null && nowPlaying.active
+    // Per track, not per line, so an instrumental gap between lines doesn't move anything.
+    readonly property bool hasLyrics: hasTrack && nowPlaying.synced && nowPlaying.lines.length > 0
+    readonly property real rest: 1 - saver.wake
+
+    // Eases the clock up to make room for lyrics, and back down without them.
+    property real lyricRoom: hasLyrics ? 1 : 0
+    Behavior on lyricRoom { NumberAnimation { duration: kit.dur(900); easing.type: Easing.InOutCubic } }
+
+    // Where the HUD's own clock sits; the resting clock glides there and shrinks to its size as the HUD comes back.
+    // Read again whenever the saver starts or ends, by when the HUD has its layout.
+    readonly property point hudClock: (saver.active || root.width > 0)
+        ? clockMainText.mapToItem(root, clockMainText.width / 2, clockMainText.height / 2) : Qt.point(0, 0)
+    readonly property point restCentre: Qt.point(root.width / 2, root.height / 2 - (60 + 70 * lyricRoom) * s)
+    function mix(a, b, t) { return a + (b - a) * t }
+
+    Text {
+        id: restTime
+        readonly property real cx: root.mix(root.restCentre.x, root.hudClock.x, saver.wake)
+        readonly property real cy: root.mix(root.restCentre.y, root.hudClock.y, saver.wake)
+        x: cx - width / 2
+        y: cy - height / 2
+        scale: root.mix(1, 42 / 120, saver.wake)
+        opacity: root.rest
+        visible: opacity > 0
+        text: root.currentTime
+        font.family: root.clockFontName; font.pixelSize: 120 * s; font.letterSpacing: 4
+        color: root.nierText
+    }
+
+    // What sits around the resting clock drifts a little as it fades, so the HUD arriving reads as one movement.
+    Item {
+        anchors.fill: parent
+        opacity: root.rest
+        visible: opacity > 0
+        transform: Translate { y: 24 * s * saver.wake }
+
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: root.restCentre.y - restTime.height / 2 - height - 4 * s
+            text: "SYSTEM TIME // STANDBY"
+            font.family: root.fontName; font.pixelSize: 10 * s; font.letterSpacing: 3
+            color: root.nierTextMid
+        }
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: root.restCentre.y + restTime.height / 2 + 2 * s
+            text: root.currentDate
+            font.family: root.fontName; font.pixelSize: 16 * s; font.letterSpacing: 6
+            color: root.nierTextMid
+        }
+
+        // The line being sung and the one after it.
+        Column {
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: root.restCentre.y + restTime.height / 2 + 56 * s
+            width: 760 * s
+            spacing: 12 * s
+            opacity: root.lyricRoom
+
+            Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width * 0.5; height: 1
+                color: root.nierBorder; opacity: 0.5
+            }
+            Text {
+                id: lyricNow
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                text: root.hasLyrics ? root.nowPlaying.current : ""
+                font.family: root.fontName; font.pixelSize: 26 * s; font.letterSpacing: 1
+                color: root.nierText
+                // A new line fades in rather than jumping.
+                onTextChanged: if (!kit.reduceMotion) lineIn.restart()
+                NumberAnimation { id: lineIn; target: lyricNow; property: "opacity"; from: 0; to: 1; duration: kit.dur(350) }
+            }
+            Text {
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.WordWrap
+                text: root.hasLyrics ? root.nowPlaying.next : ""
+                font.family: root.fontName; font.pixelSize: 16 * s; font.letterSpacing: 1
+                color: root.nierTextMid
+                opacity: 0.7
+            }
+        }
+    }
+
+    // ── NOW PLAYING: the track and how far through it ──
+    function clockOf(secs) {
+        const t = Math.max(0, Math.floor(secs))
+        return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0")
+    }
+    property real trackShown: hasTrack ? 1 : 0
+    Behavior on trackShown { NumberAnimation { duration: kit.dur(600); easing.type: Easing.InOutQuad } }
+
+    Item {
+        id: audioLog
+        anchors.left: parent.left; anchors.leftMargin: 70 * s
+        anchors.bottom: parent.bottom; anchors.bottomMargin: 90 * s
+        width: 440 * s; height: logColumn.height + 24 * s
+        opacity: root.rest * root.trackShown
+        visible: opacity > 0
+        transform: Translate { x: -20 * s * (1 - root.rest * root.trackShown) }
+
+        Rectangle {
+            anchors.fill: parent
+            color: root.nierAccent; opacity: 0.35
+            border.color: root.nierBorder; border.width: 1
+        }
+        Column {
+            id: logColumn
+            x: 14 * s; y: 12 * s
+            width: parent.width - 28 * s
+            spacing: 6 * s
+
+            Row {
+                width: parent.width
+                spacing: 8 * s
+                Rectangle { width: 6 * s; height: 6 * s; color: root.nierDark; anchors.verticalCenter: parent.verticalCenter }
+                Text {
+                    text: "AUDIO LOG"
+                    font.family: root.fontName; font.pixelSize: 9 * s; font.letterSpacing: 3
+                    color: root.nierTextMid
+                }
+                Item { width: parent.width - 150 * s; height: 1 }
+                Text {
+                    text: root.hasTrack && root.nowPlaying.playing ? "PLAYING" : "PAUSED"
+                    font.family: root.fontName; font.pixelSize: 9 * s; font.letterSpacing: 3
+                    color: root.nierTextMid
+                }
+            }
+            Text {
+                width: parent.width
+                elide: Text.ElideRight
+                text: root.hasTrack ? root.nowPlaying.title : ""
+                font.family: root.fontName; font.pixelSize: 18 * s; font.letterSpacing: 1
+                color: root.nierText
+            }
+            Text {
+                width: parent.width
+                elide: Text.ElideRight
+                visible: text !== ""
+                text: root.hasTrack ? root.nowPlaying.artist : ""
+                font.family: root.fontName; font.pixelSize: 12 * s; font.letterSpacing: 1
+                color: root.nierTextMid
+            }
+            Item { width: 1; height: 2 * s }
+            Rectangle {
+                width: parent.width; height: 3 * s
+                color: root.nierBorder; opacity: 0.4
+                visible: root.hasTrack && root.nowPlaying.length > 0
+                Rectangle {
+                    height: parent.height
+                    width: parent.width * (root.hasTrack ? root.nowPlaying.progress : 0)
+                    color: root.nierDark
+                    // The half-second steps of the position read as a steady fill.
+                    Behavior on width { NumberAnimation { duration: 500 } }
+                }
+            }
+            Item {
+                width: parent.width; height: elapsed.height
+                visible: root.hasTrack && root.nowPlaying.length > 0
+                Text {
+                    id: elapsed
+                    text: root.hasTrack ? root.clockOf(root.nowPlaying.position) : ""
+                    font.family: root.fontName; font.pixelSize: 9 * s; font.letterSpacing: 2
+                    color: root.nierTextMid
+                }
+                Text {
+                    anchors.right: parent.right
+                    text: root.hasTrack ? root.clockOf(root.nowPlaying.length) : ""
+                    font.family: root.fontName; font.pixelSize: 9 * s; font.letterSpacing: 2
+                    color: root.nierTextMid
+                }
+            }
+        }
+    }
+
     function doLogin() {
         var uname = ""
         if (typeof userModel !== "undefined") {

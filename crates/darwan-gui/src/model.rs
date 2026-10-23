@@ -180,6 +180,7 @@ pub fn fields(
                 Key::SaverLockAfter
                     | Key::SaverReturnAfter
                     | Key::SaverScreenOffLocked
+                    | Key::SaverScreenOffPower
                     | Key::SaverQuality
             )
         })

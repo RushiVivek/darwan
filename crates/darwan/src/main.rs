@@ -50,7 +50,7 @@ enum Cmd {
         #[arg(add = ArgValueCandidates::new(completion::setting_keys))]
         key: Option<String>,
     },
-    /// Change a setting: lock.theme, sddm.theme, clock.format, clock.show_ampm, date.format, saver.lock_after, saver.return_after, saver.screen_off_locked, saver.quality, gui.look, wallpaper.folder, or <theme-id>.<option> for a theme's options and customisations (background, accent, variant, motion_speed, …)
+    /// Change a setting: lock.theme, sddm.theme, clock.format, clock.show_ampm, date.format, saver.lock_after, saver.return_after, saver.screen_off_locked, saver.screen_off_power, saver.quality, gui.look, wallpaper.folder, or <theme-id>.<option> for a theme's options and customisations (background, accent, variant, motion_speed, …)
     Set {
         #[arg(add = ArgValueCandidates::new(completion::setting_keys))]
         key: String,
@@ -83,6 +83,25 @@ enum Cmd {
     /// Internal: make the eco copies of the lock theme's videos; started when the lock theme or background changes
     #[command(name = "prepare-media", hide = true)]
     PrepareMedia,
+    /// Internal: the lyrics of a track as JSON, for the lock's now-playing: a .lrc beside it, its tags, else lrclib.net
+    #[command(hide = true)]
+    Lyrics {
+        /// The track's file or URL, as the player reports it (may be empty)
+        #[arg(default_value = "")]
+        file: String,
+        #[arg(long, default_value = "")]
+        title: String,
+        #[arg(long, default_value = "")]
+        artist: String,
+        #[arg(long, default_value = "")]
+        album: String,
+        /// Seconds
+        #[arg(long, default_value_t = 0.0)]
+        length: f64,
+        /// The player sends lyrics of its own: use them rather than asking online
+        #[arg(long)]
+        player_has_lyrics: bool,
+    },
     /// Internal: keeps the lock alive; started by `darwan lock`
     #[command(name = "lock-supervisor", hide = true)]
     LockSupervisor,
@@ -260,6 +279,35 @@ fn main() -> ExitCode {
         Cmd::Saver => saver::run(&paths),
         Cmd::Resumed => saver::resumed(),
         Cmd::PrepareMedia => media_cmd::run(&paths),
+        Cmd::Lyrics {
+            file,
+            title,
+            artist,
+            album,
+            length,
+            player_has_lyrics,
+        } => {
+            use darwan_core::lyrics;
+            let local = (file.starts_with("file://") || file.starts_with('/'))
+                .then(|| lyrics::for_file(&lyrics::path_of(&file)))
+                .flatten();
+            let track = lyrics::Track {
+                title,
+                artist,
+                album,
+                length,
+            };
+            let cache = darwan_core::paths::cache_dir().join("lyrics");
+            let found = local
+                .or_else(|| {
+                    (!player_has_lyrics)
+                        .then(|| lyrics::online(&track, &cache))
+                        .flatten()
+                })
+                .unwrap_or_default();
+            println!("{}", serde_json::to_string(&found).unwrap_or_default());
+            Ok(ExitCode::SUCCESS)
+        }
         Cmd::LockSupervisor => return supervise::run(),
         Cmd::Preview {
             id,

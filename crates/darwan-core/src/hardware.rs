@@ -187,7 +187,8 @@ fn ram_gib(text: Option<String>) -> Option<u64> {
     Some(kib.div_ceil(1 << 20))
 }
 
-fn on_battery() -> Option<bool> {
+// UPower's view; None when it can't be asked.
+pub fn on_battery() -> Option<bool> {
     let conn = zbus::blocking::Connection::system().ok()?;
     let proxy = zbus::blocking::Proxy::new(
         &conn,
